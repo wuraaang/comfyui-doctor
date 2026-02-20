@@ -158,10 +158,15 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         "wan_2.1_vae.safetensors", 0.2, "vae/wan",
         "Wan 2.1 VAE",
     ),
-    "umt5-xxl-enc-bf16.safetensors": ModelInfo(
-        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5-xxl-enc-bf16.safetensors",
-        "umt5-xxl-enc-bf16.safetensors", 9.8, "text_encoders",
-        "UMT5-XXL text encoder for Wan 2.1",
+    "umt5_xxl_fp16.safetensors": ModelInfo(
+        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp16.safetensors",
+        "umt5_xxl_fp16.safetensors", 11.4, "text_encoders",
+        "UMT5-XXL FP16 text encoder for Wan 2.1",
+    ),
+    "umt5_xxl_fp8_e4m3fn_scaled.safetensors": ModelInfo(
+        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "umt5_xxl_fp8_e4m3fn_scaled.safetensors", 6.7, "text_encoders",
+        "UMT5-XXL FP8 text encoder for Wan 2.1 (smaller, recommended)",
     ),
 
     # ━━━━ IP-Adapter ━━━━
