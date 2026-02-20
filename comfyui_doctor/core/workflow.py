@@ -71,6 +71,7 @@ MODEL_TYPE_MAP = {
 UI_ONLY_TYPES = {
     "Note", "PrimitiveNode", "Reroute",
     "SetNode", "GetNode",  # ComfyUI-Workflow-Component
+    "Bookmark (rgthree)", "Fast Groups Muter (rgthree)",  # rgthree UI-only
 }
 
 # ── Connection types that come from wires, not widgets ─────────────────
@@ -105,11 +106,50 @@ def _convert_ui_to_api_basic(data: dict) -> dict:
                 "type": link[5] if len(link) > 5 else None,
             }
     
-    # Build PrimitiveNode value propagation map
-    # PrimitiveNode outputs a single value to connected nodes
+    # ── Resolve SetNode/GetNode routing ──────────────────────────────
+    # SetNode receives a value via input link and stores it by name.
+    # GetNode retrieves by matching name and outputs to connected nodes.
+    # We resolve: GetNode output → SetNode input source (bypass both).
+    
+    node_by_id = {str(n.get("id", "")): n for n in nodes_list}
+    
+    # Map SetNode name → (source_node_id, source_slot)
+    set_sources = {}  # name → (origin_id, origin_slot)
+    for node in nodes_list:
+        if node.get("type") == "SetNode":
+            name = (node.get("widgets_values") or [""])[0]
+            # Find the input link to this SetNode
+            for inp in node.get("inputs", []):
+                link_id = inp.get("link")
+                if link_id is not None and link_id in link_map:
+                    lnk = link_map[link_id]
+                    set_sources[name] = (lnk["origin_id"], lnk["origin_slot"])
+                    break
+    
+    # Map GetNode id → (source_node_id, source_slot) via name matching
+    get_sources = {}  # get_node_id → (origin_id, origin_slot)
+    for node in nodes_list:
+        if node.get("type") == "GetNode":
+            name = (node.get("widgets_values") or [""])[0]
+            if name in set_sources:
+                get_sources[str(node.get("id", ""))] = set_sources[name]
+    
+    # ── Build PrimitiveNode value propagation map ─────────────────
     primitive_values = {}  # link_id → value from PrimitiveNode widgets
     for node in nodes_list:
         if node.get("type") == "PrimitiveNode":
+            widgets = node.get("widgets_values", [])
+            outputs = node.get("outputs", [])
+            if widgets and outputs:
+                for out in outputs:
+                    for link_id in out.get("links", []):
+                        if link_id is not None:
+                            primitive_values[link_id] = widgets[0] if widgets else None
+    
+    # ── Also handle Crystools Primitives ──────────────────────────
+    for node in nodes_list:
+        ntype = node.get("type", "")
+        if "Primitive" in ntype and "Crystool" in ntype:
             widgets = node.get("widgets_values", [])
             outputs = node.get("outputs", [])
             if widgets and outputs:
@@ -124,8 +164,11 @@ def _convert_ui_to_api_basic(data: dict) -> dict:
         node_type = node.get("type", "")
         widgets_values = node.get("widgets_values", [])
         
-        # Skip UI-only nodes
+        # Skip UI-only nodes (SetNode/GetNode are resolved above)
         if node_type in UI_ONLY_TYPES:
+            continue
+        # Also skip Crystools primitives (values propagated via links)
+        if "Primitive" in node_type and "Crystool" in node_type:
             continue
         
         inputs = {}
@@ -136,13 +179,19 @@ def _convert_ui_to_api_basic(data: dict) -> dict:
             inp_name = inp.get("name", "")
             link_id = inp.get("link")
             if link_id is not None:
-                # Check if this comes from a PrimitiveNode
+                # Check if this comes from a PrimitiveNode/Crystools
                 if link_id in primitive_values:
                     inputs[inp_name] = primitive_values[link_id]
                 elif link_id in link_map:
                     lnk = link_map[link_id]
-                    # Skip connections from UI-only nodes
-                    inputs[inp_name] = [lnk["origin_id"], lnk["origin_slot"]]
+                    origin_id = lnk["origin_id"]
+                    origin_slot = lnk["origin_slot"]
+                    
+                    # Resolve GetNode → original source
+                    if origin_id in get_sources:
+                        origin_id, origin_slot = get_sources[origin_id]
+                    
+                    inputs[inp_name] = [origin_id, origin_slot]
         
         api_format[node_id] = {
             "class_type": node_type,
