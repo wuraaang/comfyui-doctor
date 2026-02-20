@@ -1,11 +1,11 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "comfyui-doctor"
-version = "0.1.0"
-description = "Make any ComfyUI workflow work in one shot. Auto-fix missing nodes, dependencies, and models."
+version = "0.3.0"
+description = "Make any ComfyUI workflow work in one shot. Auto-fix missing nodes, models, inputs. Handles UI + API formats. Video support."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
