@@ -180,14 +180,18 @@ def test_validate_inputs():
                     "seed": ["INT", {"default": 0}],
                     "steps": ["INT", {"default": 20}],
                     "cfg": ["FLOAT", {"default": 7.0}],
-                    "model": ["MODEL"],
+                    "model": ["MODEL"],  # Connection type — skipped
+                    "positive": ["CONDITIONING"],  # Connection type — skipped
                 }
             }
         }
     }
     errors = validate_inputs(workflow, object_info)
-    assert len(errors) == 3  # steps, cfg, model missing
+    # steps and cfg are missing scalar inputs, model and positive are connection types (skipped)
+    assert len(errors) == 2  # steps, cfg missing
     assert any("steps" in e for e in errors)
+    assert any("cfg" in e for e in errors)
+    assert not any("model" in e for e in errors)  # Connection types skipped
     print(f"✅ test_validate_inputs passed ({len(errors)} errors)")
 
 
