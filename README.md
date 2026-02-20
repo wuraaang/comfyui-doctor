@@ -1,140 +1,144 @@
-# 🩺 ComfyUI Doctor
+# 🩺 comfyui-doctor
 
 **Make any ComfyUI workflow work in one shot.**
 
-Give it a workflow JSON → it analyzes what's missing → installs nodes, dependencies, models → runs it → auto-fixes errors → retries. Zero manual debugging.
+Give it a workflow JSON → it installs missing nodes, downloads models, fixes broken inputs, and runs it. No more "missing node type" errors.
 
-## 🚀 Quick Start
+## Features
+
+### V1 — One-Shot Magic ✅
+- **Auto-detect missing nodes** — compares workflow vs `/object_info`
+- **Auto-install custom nodes** — git clone + requirements.txt (40+ curated + 30,000+ via ComfyUI-Manager fallback)
+- **Auto-download models** — aria2c x16 parallel (30+ models mapped to HuggingFace URLs)
+- **Auto-restart ComfyUI** — kills & relaunches after installing new nodes
+- **Auto-fix broken inputs** — clamp out-of-range values, fix enum case, fill missing defaults from `/object_info`
+- **Auto-retry on error** — parse errors, match 35+ patterns, apply fix, retry (max 3x)
+- **Input validation** — warns about missing required inputs BEFORE queuing
+
+### Knowledge Bases
+- **35+ error patterns** — ModuleNotFoundError, CUDA OOM, missing models, validation errors...
+- **40+ curated node→repo mappings** — Impact-Pack, KJNodes, ControlNet-Aux, WAS, rgthree, AnimateDiff...
+- **30,000+ node types** via ComfyUI-Manager extension-node-map fallback
+- **30+ model→URL mappings** — SDXL, SD1.5, LoRAs, VAEs, ControlNets, upscalers...
+
+## Installation
 
 ```bash
 pip install comfyui-doctor
+# or from source:
+git clone https://github.com/wuraaang/comfyui-doctor
+cd comfyui-doctor && pip install -e .
+```
 
-# The magic one-liner:
+## Usage
+
+### One-Shot Run (the magic command)
+```bash
+# Give it a workflow, it just works
 comfyui-doctor run workflow.json
 
-# Just analyze without running:
+# With custom ComfyUI URL and path
+comfyui-doctor run workflow.json --url http://localhost:8188 --path /opt/ComfyUI
+
+# Dry run — analyze without executing
+comfyui-doctor run workflow.json --dry-run
+```
+
+### Other Commands
+```bash
+# Analyze workflow without running
 comfyui-doctor analyze workflow.json
 
-# Full health check:
+# Fix missing deps without running
+comfyui-doctor fix workflow.json
+
+# Full system diagnosis
 comfyui-doctor diagnose
+
+# Check ComfyUI status
+comfyui-doctor status
+
+# Look up where to install a node
+comfyui-doctor lookup "FaceDetailer"
+
+# Look up error fix
+comfyui-doctor check-error "ModuleNotFoundError: No module named 'insightface'"
+
+# Look up model download URL
+comfyui-doctor check-model "sd_xl_base_1.0.safetensors"
+
+# List nodes in a workflow
+comfyui-doctor nodes workflow.json
 ```
 
-## ✨ Features
+## How It Works
 
-| Feature | Description |
-|---|---|
-| **One-shot workflow runner** | Give it any workflow → it just works |
-| **Auto-detect missing nodes** | Compares workflow vs installed nodes, installs what's missing |
-| **Auto-fix Python deps** | `ModuleNotFoundError`? Fixed automatically |
-| **Model downloader** | Detects missing models, knows where to download them |
-| **Error knowledge base** | 30+ error patterns with automatic fixes |
-| **CUDA OOM handling** | Suggestions to reduce VRAM usage |
-| **Health check** | Full diagnosis of your ComfyUI setup |
-| **Dry run mode** | See what would happen without doing anything |
-
-## 📖 Commands
-
-### `comfyui-doctor run <workflow.json>`
-The main command. Analyzes, fixes, runs, and auto-retries.
-
-```bash
-# Basic usage
-comfyui-doctor run my-workflow.json
-
-# Custom ComfyUI URL
-comfyui-doctor run workflow.json --url http://localhost:8188
-
-# More retries
-comfyui-doctor run workflow.json --retries 5
-
-# Dry run (analyze + show fixes, don't execute)
-comfyui-doctor run workflow.json --dry-run
-
-# Disable auto-fix
-comfyui-doctor run workflow.json --no-fix
+```
+Parse workflow.json
+       ↓
+Query /object_info → find missing nodes
+       ↓
+Look up node packages (local DB → ComfyUI-Manager fallback)
+       ↓
+git clone + pip install requirements.txt
+       ↓
+Restart ComfyUI (kill + relaunch + wait)
+       ↓
+Check models → aria2c x16 download
+       ↓
+Validate inputs → auto-fix (clamp, fill defaults, fix enums)
+       ↓
+Queue prompt → wait for completion
+       ↓
+Error? → match 35+ patterns → apply fix → retry
+       ↓
+✅ Success! Image saved.
 ```
 
-### `comfyui-doctor analyze <workflow.json>`
-Analyze a workflow without running it. Shows missing nodes, models, dependencies.
+## Test Results
 
-### `comfyui-doctor fix <workflow.json>`
-Apply fixes without running the workflow. Useful for setup.
+Tested live on GPUhub RTX 5090 + ComfyUI 0.14.1 + PyTorch 2.10+cu128:
 
-### `comfyui-doctor diagnose`
-Full health check: ComfyUI status, GPU info, installed nodes, models, disk space.
+| # | Workflow | Custom Nodes | Result |
+|---|---------|-------------|--------|
+| 1 | Simple SDXL | None | ✅ one-shot |
+| 2 | KJNodes resize | ComfyUI-KJNodes | ✅ auto-install + restart |
+| 3 | ControlNet Canny | comfyui_controlnet_aux + deps | ✅ auto-install + restart |
+| 4 | Comfyroll batch | ComfyUI_Comfyroll | ✅ auto-install + restart |
+| 7 | WAS filters (broken inputs) | was-node-suite + auto-clamp | ✅ auto-fix brightness |
+| 8 | Multi-node (KJNodes+WAS) | Already installed | ✅ direct |
+| 9 | Built-in advanced | None | ✅ direct |
+| 10 | ImageBlend | Built-in | ✅ direct |
+| 11 | WAS Resize (5 missing inputs) | auto-fill defaults | ✅ auto-fix 5 inputs |
 
-### `comfyui-doctor status`
-Quick status: is ComfyUI running? Queue? VRAM usage?
+**10/11 success rate** — the one failure was a deliberately incomplete test workflow.
 
-### `comfyui-doctor check-error "ModuleNotFoundError: No module named 'insightface'"`
-Look up any error in the knowledge base.
+## Architecture
 
-### `comfyui-doctor check-model "sd_xl_base_1.0.safetensors"`
-Look up a model — shows download URL, size, folder.
+```
+comfyui_doctor/
+├── cli.py                    # Typer CLI (10 commands)
+├── core/
+│   ├── api.py                # ComfyUI HTTP client (urllib)
+│   ├── doctor.py             # Auto-fix engine (the brain)
+│   └── workflow.py           # JSON parser, validator, auto-fixer
+└── knowledge/
+    ├── error_db.py           # 35+ regex error patterns
+    ├── node_map.py           # 40+ curated node→repo mappings
+    ├── model_map.py          # 30+ model→URL mappings
+    └── manager_db.py         # ComfyUI-Manager 30K+ fallback
+```
 
-### `comfyui-doctor nodes <workflow.json>`
-List all node types used in a workflow.
+## Requirements
 
-## 🧠 How It Works
+- Python 3.10+
+- ComfyUI running with `--listen` flag
+- Minimal deps: `typer`, `rich` (that's it!)
 
-### Pre-flight Analysis
-1. Parse workflow JSON (supports both API and UI formats)
-2. Extract all `class_type` values (node types)
-3. Query ComfyUI's `/object_info` for registered types
-4. Diff → find missing nodes
-5. Look up missing nodes in built-in knowledge base (100+ mappings)
-6. Check model file references against disk
-7. Look up missing models in built-in registry (50+ models)
-
-### Auto-Fix Pipeline
-1. Install missing custom node repos (`git clone`)
-2. Install missing pip dependencies
-3. Download missing models (aria2c x16 for speed)
-4. Queue the workflow
-5. If error → match against 30+ error patterns
-6. Apply fix → retry (up to N times)
-
-### Error Knowledge Base
-The doctor knows about:
-- **Missing Python modules** (insightface, onnxruntime, mediapipe, etc.)
-- **CUDA out of memory** (with reduction suggestions)
-- **Missing model files** (with download URLs)
-- **Node type mismatches** (version compatibility)
-- **Import failures** (broken custom nodes)
-- **Permission errors**
-
-## 🔧 Configuration
-
-### ComfyUI Path Auto-Detection
-The doctor looks for ComfyUI in these paths (in order):
-1. `/workspace/runpod-slim/ComfyUI` (RunPod)
-2. `/workspace/ComfyUI`
-3. `~/ComfyUI`
-4. `~/comfy/ComfyUI`
-5. Current directory
-
-Override with `--path /your/comfyui/path`.
-
-### Adding to the Knowledge Base
-The knowledge base is in `comfyui_doctor/knowledge/`:
-- `error_db.py` — Error patterns and fixes
-- `node_map.py` — Node type → git repo mapping
-- `model_map.py` — Model filename → download URL mapping
-
-PRs welcome to expand these databases!
-
-## 🤝 Integration with Comfy-Pilot
-When used alongside [Comfy-Pilot](https://github.com/ConstantineB6/Comfy-Pilot), 
-Claude Code can see the ComfyUI frontend AND auto-fix workflows — the ultimate 
-AI-powered ComfyUI experience.
-
-## 📄 License
+## License
 
 MIT
 
-## 🙏 Credits
+## Credits
 
-- [ComfyUI](https://github.com/comfyanonymous/ComfyUI) — The backbone
-- [comfy-cli](https://github.com/Comfy-Org/comfy-cli) — Inspiration for CLI design
-- [ComfyUI-Manager](https://github.com/Comfy-Org/ComfyUI-Manager) — Node registry data
-- [Comfy-Pilot](https://github.com/ConstantineB6/Comfy-Pilot) — Frontend integration
+Built by [wuraaang](https://github.com/wuraaang) with ❤️ and 🩺
