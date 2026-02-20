@@ -41,6 +41,7 @@ from ..knowledge.node_map import (
     NodePackage,
 )
 from ..knowledge.model_map import lookup_model, ModelInfo
+from ..knowledge.node_replacements import find_replacement, get_removable_types
 
 console = Console()
 
@@ -252,12 +253,49 @@ class Doctor:
                 ))
             
             if unknown_types:
-                report.fixes_needed.append(FixAction(
-                    description=f"Lookup unknown nodes via ComfyUI-Manager: {', '.join(unknown_types)}",
-                    commands=[],
-                    category="lookup_node",
-                    auto=False,
-                ))
+                # Try node replacements for truly unknown types
+                replaceable = []
+                still_unknown = []
+                for ut in unknown_types:
+                    repl = find_replacement(ut)
+                    if repl:
+                        replaceable.append((ut, repl))
+                    else:
+                        still_unknown.append(ut)
+                
+                for orig, repl in replaceable:
+                    if repl.replacement in ("__REMOVE__", "__PASSTHROUGH__"):
+                        console.print(f"     🗑️  {orig} → [dim]removed (UI-only)[/dim]")
+                        # Remove from workflow
+                        nodes_to_remove = [nid for nid, nd in workflow.items()
+                                          if nd.get("class_type") == orig]
+                        for nid in nodes_to_remove:
+                            del workflow[nid]
+                        report.fixes_applied += 1
+                    else:
+                        console.print(f"     🔄 {orig} → [green]{repl.replacement}[/green] ({repl.description})")
+                        if repl.notes:
+                            console.print(f"        ⚠️  {repl.notes}")
+                        # Apply replacement in workflow
+                        for nid, nd in workflow.items():
+                            if nd.get("class_type") == orig:
+                                nd["class_type"] = repl.replacement
+                                # Remap inputs
+                                old_inputs = nd.get("inputs", {})
+                                new_inputs = {}
+                                for k, v in old_inputs.items():
+                                    new_key = repl.input_mapping.get(k, k)
+                                    new_inputs[new_key] = v
+                                nd["inputs"] = new_inputs
+                        report.fixes_applied += 1
+                
+                if still_unknown:
+                    report.fixes_needed.append(FixAction(
+                        description=f"Lookup unknown nodes via ComfyUI-Manager: {', '.join(still_unknown)}",
+                        commands=[],
+                        category="lookup_node",
+                        auto=False,
+                    ))
         else:
             if registered:
                 console.print("  ✅ All node types are installed")

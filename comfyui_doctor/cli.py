@@ -328,5 +328,85 @@ def _print_summary(report: DoctorReport):
     console.print("═" * 60)
 
 
+@app.command()
+def optimize(
+    workflow_path: str = typer.Argument(help="Path to workflow JSON file"),
+    url: str = typer.Option("http://127.0.0.1:8188", "--url", "-u", help="ComfyUI URL"),
+    vram: float = typer.Option(0, "--vram", help="GPU VRAM in GB (auto-detected if 0)"),
+):
+    """⚡ Analyze a workflow for speed/memory/quality optimizations."""
+    from .core.optimizer import analyze_optimizations, format_optimizations
+    from .core.workflow import load_workflow
+
+    console.print(Panel(
+        f"[bold]⚡ ComfyUI Doctor Optimizer[/bold]\nWorkflow: {workflow_path}",
+        border_style="cyan",
+    ))
+
+    workflow, is_api = load_workflow(workflow_path)
+
+    # Auto-detect VRAM
+    if vram == 0:
+        api = ComfyAPI(url)
+        try:
+            import urllib.request, json as _json
+            with urllib.request.urlopen(f"{url}/system_stats", timeout=5) as r:
+                stats = _json.loads(r.read())
+                devices = stats.get("system", {}).get("devices", [])
+                if devices:
+                    vram = devices[0].get("vram_total", 0) / 1024 / 1024 / 1024
+                    console.print(f"  GPU: {devices[0].get('name', '?')} ({vram:.0f}GB VRAM)")
+        except Exception:
+            console.print("  ⚠️  Could not detect GPU — pass --vram manually")
+
+    opts = analyze_optimizations(workflow, vram_gb=vram)
+    console.print(format_optimizations(opts))
+
+    if not opts:
+        raise typer.Exit(0)
+    raise typer.Exit(0)
+
+
+@app.command()
+def create(
+    template: str = typer.Argument(help="Template name: txt2img-sdxl, txt2video-wan"),
+    output: str = typer.Option("workflow.json", "--output", "-o", help="Output file path"),
+    prompt: str = typer.Option("a beautiful sunset over mountains", "--prompt", "-p"),
+    negative: str = typer.Option("ugly, blurry", "--negative", "-n"),
+    width: int = typer.Option(1024, "--width", "-W"),
+    height: int = typer.Option(1024, "--height", "-H"),
+    steps: int = typer.Option(20, "--steps"),
+    seed: int = typer.Option(42, "--seed"),
+):
+    """🎨 Create a workflow from a template."""
+    from .core.builder import build_txt2img_sdxl, build_txt2video_wan
+
+    templates = {
+        "txt2img-sdxl": lambda: build_txt2img_sdxl(
+            prompt=prompt, negative=negative, width=width, height=height,
+            steps=steps, seed=seed,
+        ),
+        "txt2video-wan": lambda: build_txt2video_wan(
+            prompt=prompt, negative=negative, width=width, height=height,
+            steps=steps, seed=seed,
+        ),
+    }
+
+    if template not in templates:
+        console.print(f"[red]Unknown template '{template}'[/red]")
+        console.print(f"Available: {', '.join(templates.keys())}")
+        raise typer.Exit(1)
+
+    workflow = templates[template]()
+
+    import json
+    with open(output, "w") as f:
+        json.dump(workflow, f, indent=2)
+
+    console.print(f"✅ Created {template} workflow → {output}")
+    console.print(f"   Run it: comfyui-doctor run {output}")
+    raise typer.Exit(0)
+
+
 if __name__ == "__main__":
     app()
