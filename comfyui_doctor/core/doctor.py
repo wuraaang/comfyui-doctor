@@ -482,20 +482,34 @@ class Doctor:
             if result["status"] == "success":
                 console.print("  ✅ [green bold]Success![/green bold]")
                 outputs = result.get("outputs", {})
+                has_quality_issue = False
                 if outputs:
                     console.print("  📁 Outputs:")
                     for node_id, out in outputs.items():
                         if "images" in out:
                             for img in out["images"]:
+                                fname = img.get("filename", "?")
+                                subfolder = img.get("subfolder", "")
+                                # Validate image quality
+                                quality = self._check_image_quality(fname, subfolder)
+                                status_icon = quality.get("icon", "🖼️")
                                 console.print(
-                                    f"     🖼️  {img.get('filename', '?')} "
-                                    f"({img.get('subfolder', 'output')})"
+                                    f"     {status_icon}  {fname} "
+                                    f"({quality.get('info', '')})"
                                 )
+                                if quality.get("blank"):
+                                    has_quality_issue = True
+                                    console.print(
+                                        f"     ⚠️  [yellow]Image appears blank/solid! "
+                                        f"(mean={quality.get('mean', 0):.0f}, std={quality.get('std', 0):.0f})[/yellow]"
+                                    )
                         if "gifs" in out:
                             for gif in out["gifs"]:
                                 console.print(
                                     f"     🎬 {gif.get('filename', '?')}"
                                 )
+                if has_quality_issue:
+                    console.print("  ⚠️  [yellow]Some outputs may be blank — check the images![/yellow]")
                 report.success = True
                 return report
 
@@ -598,6 +612,57 @@ class Doctor:
             f'-d "{dest_dir}" -o "{info.filename}" "{info.url}" || '
             f'wget -q --show-progress -O "{dest}" "{info.url}")'
         )
+
+    def _check_image_quality(self, filename: str, subfolder: str = "") -> dict:
+        """Check if an output image is blank/solid color.
+        
+        Returns: {icon, info, blank, mean, std, width, height}
+        """
+        try:
+            # Build path to the image
+            output_dir = os.path.join(self.comfyui_path, "output")
+            if subfolder:
+                img_path = os.path.join(output_dir, subfolder, filename)
+            else:
+                img_path = os.path.join(output_dir, filename)
+            
+            if not os.path.isfile(img_path):
+                return {"icon": "🖼️", "info": "file not found", "blank": False}
+            
+            # Quick check using PIL
+            try:
+                from PIL import Image
+                import numpy as np
+                img = Image.open(img_path)
+                w, h = img.size
+                arr = np.array(img, dtype=float)
+                mean_val = arr.mean()
+                std_val = arr.std()
+                
+                is_blank = std_val < 10  # Almost no variation = blank/solid
+                is_dark = mean_val < 15 and std_val < 15  # All black
+                
+                if is_blank:
+                    if mean_val > 240:
+                        return {"icon": "⚪", "info": f"{w}x{h} WHITE", "blank": True, "mean": mean_val, "std": std_val, "width": w, "height": h}
+                    elif is_dark:
+                        return {"icon": "⚫", "info": f"{w}x{h} BLACK", "blank": True, "mean": mean_val, "std": std_val, "width": w, "height": h}
+                    else:
+                        return {"icon": "🟫", "info": f"{w}x{h} SOLID", "blank": True, "mean": mean_val, "std": std_val, "width": w, "height": h}
+                
+                size_mb = os.path.getsize(img_path) / (1024 * 1024)
+                return {"icon": "🖼️", "info": f"{w}x{h} {size_mb:.1f}MB", "blank": False, "mean": mean_val, "std": std_val, "width": w, "height": h}
+                
+            except ImportError:
+                # No PIL — check file size as heuristic
+                size = os.path.getsize(img_path)
+                if size < 1000:  # < 1KB is suspicious for an image
+                    return {"icon": "⚠️", "info": f"{size}B (suspiciously small)", "blank": True}
+                size_mb = size / (1024 * 1024)
+                return {"icon": "🖼️", "info": f"{size_mb:.1f}MB", "blank": False}
+                
+        except Exception as e:
+            return {"icon": "🖼️", "info": str(e)[:50], "blank": False}
 
     def _confirm(self, message: str) -> bool:
         """Ask user for confirmation."""
