@@ -324,6 +324,12 @@ class Doctor:
                         report.fixes_applied.append(fix.description)
                         if fix.category == "install_node":
                             installed_nodes = True
+                    elif "already exists" in result.stderr:
+                        # Node already cloned — that's fine, it just needs a restart
+                        console.print(f"    ✅ Already installed (needs restart)")
+                        report.fixes_applied.append(f"{fix.description} (already present)")
+                        if fix.category == "install_node":
+                            installed_nodes = True
                     else:
                         stderr = result.stderr.strip()[-200:]
                         console.print(f"    ❌ Failed: {stderr}")
@@ -399,10 +405,16 @@ class Doctor:
             result = self.api.queue_prompt(workflow)
             if "error" in result:
                 error_msg = result["error"]
+                details = result.get("details", {})
+                # ComfyUI returns details about missing nodes in the error body
+                detail_str = json.dumps(details) if details else ""
+                full_error = f"{error_msg} {detail_str}"
                 console.print(f"  ❌ Queue error: {error_msg}")
+                if details:
+                    console.print(f"     Details: {json.dumps(details, indent=2)[:300]}")
                 
                 # Try to fix the queue error
-                if not self._try_fix_error(error_msg, report):
+                if not self._try_fix_error(full_error, report):
                     break
                 continue
 

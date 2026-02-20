@@ -45,7 +45,13 @@ class ComfyAPI:
                 body = resp.read().decode("utf-8")
                 return json.loads(body) if body.strip() else {}
         except urllib.error.HTTPError as e:
-            return {"error": f"HTTP {e.code}: {e.reason}"}
+            # Try to read error body for more details
+            try:
+                body = e.read().decode("utf-8")
+                err_data = json.loads(body)
+                return {"error": f"HTTP {e.code}: {e.reason}", "details": err_data}
+            except Exception:
+                return {"error": f"HTTP {e.code}: {e.reason}"}
         except urllib.error.URLError as e:
             return {"error": f"Connection failed: {e}"}
         except socket.timeout:
