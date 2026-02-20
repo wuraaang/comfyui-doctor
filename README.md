@@ -2,143 +2,212 @@
 
 **Make any ComfyUI workflow work in one shot.**
 
-Give it a workflow JSON → it installs missing nodes, downloads models, fixes broken inputs, and runs it. No more "missing node type" errors.
+Drop in a workflow JSON from Reddit, CivitAI, YouTube, or anywhere — comfyui-doctor will analyze it, install missing nodes, download models, fix inputs, and run it. No manual debugging.
+
+```bash
+pip install comfyui-doctor
+comfyui-doctor run workflow.json
+```
+
+## What it does
+
+```
+workflow.json → 🩺 doctor → ✅ working output
+```
+
+1. **Parses** any workflow (API format or UI format from the ComfyUI interface)
+2. **Detects** missing custom nodes, models, and dependencies
+3. **Installs** everything automatically (git clone + pip + aria2c downloads)
+4. **Validates** all inputs (fills defaults, clamps ranges, fixes enums)
+5. **Runs** the workflow on your ComfyUI instance
+6. **Retries** on errors with automatic fixes (up to 3 attempts)
+7. **Validates output** (detects blank/solid images)
 
 ## Features
 
-### V1 — One-Shot Magic ✅
-- **Auto-detect missing nodes** — compares workflow vs `/object_info`
-- **Auto-install custom nodes** — git clone + requirements.txt (40+ curated + 30,000+ via ComfyUI-Manager fallback)
-- **Auto-download models** — aria2c x16 parallel (30+ models mapped to HuggingFace URLs)
-- **Auto-restart ComfyUI** — kills & relaunches after installing new nodes
-- **Auto-fix broken inputs** — clamp out-of-range values, fix enum case, fill missing defaults from `/object_info`
-- **Auto-retry on error** — parse errors, match 35+ patterns, apply fix, retry (max 3x)
-- **Input validation** — warns about missing required inputs BEFORE queuing
+### 🔧 One-Shot Fix
+```bash
+# Just works™ — installs nodes, downloads models, fixes inputs, runs it
+comfyui-doctor run workflow.json
+```
 
-### Knowledge Bases
-- **35+ error patterns** — ModuleNotFoundError, CUDA OOM, missing models, validation errors...
-- **40+ curated node→repo mappings** — Impact-Pack, KJNodes, ControlNet-Aux, WAS, rgthree, AnimateDiff...
-- **30,000+ node types** via ComfyUI-Manager extension-node-map fallback
-- **30+ model→URL mappings** — SDXL, SD1.5, LoRAs, VAEs, ControlNets, upscalers...
+### 🔍 Analyze Without Running
+```bash
+# See what's missing without touching anything
+comfyui-doctor analyze workflow.json
+```
+
+### ⚡ Speed Optimizer
+```bash
+# Get optimization suggestions (FP8, tiling, steps, resolution)
+comfyui-doctor optimize workflow.json
+```
+
+### 🎨 Create From Template
+```bash
+# Generate a workflow from scratch
+comfyui-doctor create txt2img-sdxl -p "a cat in space" -o my_workflow.json
+comfyui-doctor create txt2video-wan -p "ocean waves at sunset" -o video.json
+```
+
+### 🔎 Node Lookup
+```bash
+# Find any node type across 30,000+ known types
+comfyui-doctor lookup "IPAdapter"
+```
+
+### 📊 System Status
+```bash
+# Check ComfyUI health
+comfyui-doctor status
+```
+
+## Handles Real-World Workflows
+
+comfyui-doctor is tested against **real workflows shared by the community**, not just synthetic tests:
+
+| Test | Source | Format | Nodes | Result |
+|------|--------|--------|-------|--------|
+| SDXL Advanced | cubiq/ComfyUI_Workflows | UI | 19 | ✅ One shot |
+| SDXL text g-l | cubiq/ComfyUI_Workflows | UI | 12 | ✅ One shot |
+| Wan 2.1 T2V | Custom video | API | 7 | ✅ One shot |
+| Multi-node pack | Mixed custom nodes | API | 8 | ✅ One shot |
+| ControlNet | comfyui_controlnet_aux | API | 6 | ✅ One shot |
+| WAS filters | was-node-suite | API | 5 | ✅ One shot |
+| Animated WEBP | SaveAnimatedWEBP | API | 5 | ✅ One shot |
+
+**16/16 test workflows passing** (12 image + 1 animation + 1 video + 2 wild UI-format)
+
+## UI Format Support
+
+99% of workflows shared online are in ComfyUI's **UI format** (not the API format). comfyui-doctor handles both:
+
+- Automatically detects UI vs API format
+- Converts UI → API using `/object_info` for accurate widget mapping
+- Handles `PrimitiveNode`, `Note`, `Reroute` (UI-only nodes)
+- Propagates PrimitiveNode values to connected nodes
+
+## Smart Auto-Fix
+
+| Problem | Fix |
+|---------|-----|
+| Missing custom node | Auto-install via git clone (40+ curated + 30,000 from ComfyUI-Manager) |
+| Missing pip dependency | `pip install` from requirements.txt |
+| Missing model | Download via aria2c (16 connections) or wget |
+| Missing required input | Fill with default from `/object_info` |
+| Value out of range | Clamp to min/max |
+| Wrong enum case | Fix case or use first valid option |
+| Node unavailable | Replace with equivalent built-in node |
+| Blank/solid output | Detect and report (quality validation) |
+
+## Node Replacement
+
+When a custom node is truly unavailable (repo deleted, archived, incompatible), the doctor can replace it with an equivalent:
+
+- `Efficient Loader` → `CheckpointLoaderSimple`
+- `KSampler (Efficient)` → `KSampler`
+- `SaveImageWithMetaData` → `SaveImage`
+- `BNK_CLIPTextEncodeAdvanced` → `CLIPTextEncode`
+- And more...
 
 ## Installation
 
 ```bash
 pip install comfyui-doctor
-# or from source:
+```
+
+Or from source:
+```bash
 git clone https://github.com/wuraaang/comfyui-doctor
-cd comfyui-doctor && pip install -e .
+cd comfyui-doctor
+pip install -e .
 ```
 
-## Usage
+### Requirements
 
-### One-Shot Run (the magic command)
-```bash
-# Give it a workflow, it just works
-comfyui-doctor run workflow.json
+- Python 3.10+
+- A running ComfyUI instance (default: `http://127.0.0.1:8188`)
+- `aria2c` recommended for fast model downloads (falls back to `wget`)
 
-# With custom ComfyUI URL and path
-comfyui-doctor run workflow.json --url http://localhost:8188 --path /opt/ComfyUI
+## CLI Reference
 
-# Dry run — analyze without executing
-comfyui-doctor run workflow.json --dry-run
 ```
-
-### Other Commands
-```bash
-# Analyze workflow without running
-comfyui-doctor analyze workflow.json
-
-# Fix missing deps without running
-comfyui-doctor fix workflow.json
-
-# Full system diagnosis
-comfyui-doctor diagnose
-
-# Check ComfyUI status
-comfyui-doctor status
-
-# Look up where to install a node
-comfyui-doctor lookup "FaceDetailer"
-
-# Look up error fix
-comfyui-doctor check-error "ModuleNotFoundError: No module named 'insightface'"
-
-# Look up model download URL
-comfyui-doctor check-model "sd_xl_base_1.0.safetensors"
-
-# List nodes in a workflow
-comfyui-doctor nodes workflow.json
+comfyui-doctor run <workflow.json>        # 🚀 Run with auto-fix (the magic)
+comfyui-doctor analyze <workflow.json>    # 🔍 Analyze without running
+comfyui-doctor fix <workflow.json>        # 🔧 Apply fixes without running
+comfyui-doctor optimize <workflow.json>   # ⚡ Speed/memory suggestions
+comfyui-doctor create <template>          # 🎨 Create from template
+comfyui-doctor diagnose                   # 🏥 Full system diagnosis
+comfyui-doctor status                     # 📊 Check ComfyUI status
+comfyui-doctor nodes                      # 📦 List installed nodes
+comfyui-doctor lookup <query>             # 🔎 Search 30K+ node types
+comfyui-doctor version                    # ℹ️  Version info
 ```
 
 ## How It Works
 
 ```
-Parse workflow.json
-       ↓
-Query /object_info → find missing nodes
-       ↓
-Look up node packages (local DB → ComfyUI-Manager fallback)
-       ↓
-git clone + pip install requirements.txt
-       ↓
-Restart ComfyUI (kill + relaunch + wait)
-       ↓
-Check models → aria2c x16 download
-       ↓
-Validate inputs → auto-fix (clamp, fill defaults, fix enums)
-       ↓
-Queue prompt → wait for completion
-       ↓
-Error? → match 35+ patterns → apply fix → retry
-       ↓
-✅ Success! Image saved.
+                    ┌─────────────────┐
+                    │  workflow.json   │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │  Parse & Detect  │ UI or API format?
+                    │  Format          │ Convert if needed
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │  Query ComfyUI   │ /object_info
+                    │  /object_info    │ (types, inputs, defaults)
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │  Analyze         │ Missing nodes?
+                    │  & Diff          │ Missing models?
+                    └────────┬────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              │              │              │
+     ┌────────▼───┐  ┌──────▼─────┐  ┌────▼────────┐
+     │ Install     │  │ Download   │  │ Validate    │
+     │ Nodes       │  │ Models     │  │ & Fix       │
+     │ (git+pip)   │  │ (aria2c)   │  │ Inputs      │
+     └────────┬───┘  └──────┬─────┘  └────┬────────┘
+              │              │              │
+              └──────────────┼──────────────┘
+                             │
+                    ┌────────▼────────┐
+                    │  Restart ComfyUI │ (if nodes installed)
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │  Queue Prompt    │ Send to ComfyUI
+                    │  & Wait          │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+              ┌─────│  Success?        │─────┐
+              │ NO  └──────────────────┘ YES │
+              │                              │
+     ┌────────▼───┐                 ┌────────▼───────┐
+     │ Parse Error │                │ Validate Output │
+     │ & Auto-Fix  │                │ (quality check) │
+     │ Retry (x3)  │                └────────────────┘
+     └─────────────┘
 ```
 
-## Test Results
+## Knowledge Base
 
-Tested live on GPUhub RTX 5090 + ComfyUI 0.14.1 + PyTorch 2.10+cu128:
-
-| # | Workflow | Custom Nodes | Result |
-|---|---------|-------------|--------|
-| 1 | Simple SDXL | None | ✅ one-shot |
-| 2 | KJNodes resize | ComfyUI-KJNodes | ✅ auto-install + restart |
-| 3 | ControlNet Canny | comfyui_controlnet_aux + deps | ✅ auto-install + restart |
-| 4 | Comfyroll batch | ComfyUI_Comfyroll | ✅ auto-install + restart |
-| 7 | WAS filters (broken inputs) | was-node-suite + auto-clamp | ✅ auto-fix brightness |
-| 8 | Multi-node (KJNodes+WAS) | Already installed | ✅ direct |
-| 9 | Built-in advanced | None | ✅ direct |
-| 10 | ImageBlend | Built-in | ✅ direct |
-| 11 | WAS Resize (5 missing inputs) | auto-fill defaults | ✅ auto-fix 5 inputs |
-
-**10/11 success rate** — the one failure was a deliberately incomplete test workflow.
-
-## Architecture
-
-```
-comfyui_doctor/
-├── cli.py                    # Typer CLI (10 commands)
-├── core/
-│   ├── api.py                # ComfyUI HTTP client (urllib)
-│   ├── doctor.py             # Auto-fix engine (the brain)
-│   └── workflow.py           # JSON parser, validator, auto-fixer
-└── knowledge/
-    ├── error_db.py           # 35+ regex error patterns
-    ├── node_map.py           # 40+ curated node→repo mappings
-    ├── model_map.py          # 30+ model→URL mappings
-    └── manager_db.py         # ComfyUI-Manager 30K+ fallback
-```
-
-## Requirements
-
-- Python 3.10+
-- ComfyUI running with `--listen` flag
-- Minimal deps: `typer`, `rich` (that's it!)
+- **40+ curated** node → package mappings
+- **30,000+ types** from ComfyUI-Manager fallback (cached 24h)
+- **40+ model** download URLs (SDXL, SD1.5, Wan 2.1, ControlNet, IP-Adapter...)
+- **35+ error patterns** with regex matching and auto-fix rules
+- **20+ node replacements** for unavailable custom nodes
 
 ## License
 
-MIT
+MIT — use it, fork it, ship it.
 
 ## Credits
 
-Built by [wuraaang](https://github.com/wuraaang) with ❤️ and 🩺
+Built by [Bebop Studio](https://github.com/wuraaang) with ❤️ and ComfyUI frustration.
