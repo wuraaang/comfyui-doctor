@@ -113,21 +113,24 @@ def _convert_ui_to_api_basic(data: dict) -> dict:
     
     node_by_id = {str(n.get("id", "")): n for n in nodes_list}
     
-    # Map SetNode name → (source_node_id, source_slot)
-    set_sources = {}  # name → (origin_id, origin_slot)
+    # Map SetNode name → source (either connection tuple or literal value)
+    set_sources = {}  # name → (origin_id, origin_slot) or {"_value": val}
     for node in nodes_list:
         if node.get("type") == "SetNode":
             name = (node.get("widgets_values") or [""])[0]
-            # Find the input link to this SetNode
             for inp in node.get("inputs", []):
                 link_id = inp.get("link")
-                if link_id is not None and link_id in link_map:
-                    lnk = link_map[link_id]
-                    set_sources[name] = (lnk["origin_id"], lnk["origin_slot"])
+                if link_id is not None:
+                    # Check if source is a Primitive/Crystools (literal value)
+                    if link_id in primitive_values:
+                        set_sources[name] = {"_value": primitive_values[link_id]}
+                    elif link_id in link_map:
+                        lnk = link_map[link_id]
+                        set_sources[name] = (lnk["origin_id"], lnk["origin_slot"])
                     break
     
-    # Map GetNode id → (source_node_id, source_slot) via name matching
-    get_sources = {}  # get_node_id → (origin_id, origin_slot)
+    # Map GetNode id → source via name matching
+    get_sources = {}  # get_node_id → (origin_id, origin_slot) or {"_value": val}
     for node in nodes_list:
         if node.get("type") == "GetNode":
             name = (node.get("widgets_values") or [""])[0]
@@ -189,7 +192,13 @@ def _convert_ui_to_api_basic(data: dict) -> dict:
                     
                     # Resolve GetNode → original source
                     if origin_id in get_sources:
-                        origin_id, origin_slot = get_sources[origin_id]
+                        src = get_sources[origin_id]
+                        if isinstance(src, dict) and "_value" in src:
+                            # Literal value from Crystools/Primitive via Set/Get
+                            inputs[inp_name] = src["_value"]
+                            continue
+                        else:
+                            origin_id, origin_slot = src
                     
                     inputs[inp_name] = [origin_id, origin_slot]
         
