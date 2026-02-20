@@ -189,6 +189,122 @@ def analyze_workflow(
     )
 
 
+def validate_inputs(
+    workflow: dict,
+    object_info: dict,
+) -> list[str]:
+    """Validate workflow inputs against ComfyUI's /object_info.
+    
+    Returns list of validation error strings.
+    Checks: all required inputs (non-optional) are provided.
+    """
+    errors = []
+    
+    for node_id, node_data in workflow.items():
+        if not isinstance(node_data, dict):
+            continue
+        
+        class_type = node_data.get("class_type", "")
+        inputs = node_data.get("inputs", {})
+        
+        if class_type not in object_info:
+            continue  # Missing node — handled elsewhere
+        
+        node_info = object_info[class_type]
+        required_inputs = node_info.get("input", {}).get("required", {})
+        
+        for input_name, input_spec in required_inputs.items():
+            if input_name not in inputs:
+                # Check if this input might be provided via a connection (list ref)
+                # Connections show up as [node_id, slot] in inputs
+                errors.append(
+                    f"Node #{node_id} ({class_type}): missing required input '{input_name}'"
+                )
+    
+    return errors
+
+
+def auto_fix_inputs(
+    workflow: dict,
+    object_info: dict,
+) -> tuple[dict, list[str]]:
+    """Auto-fix workflow inputs: clamp values to allowed ranges, fill defaults.
+    
+    Returns (fixed_workflow, list_of_fixes_applied).
+    Modifies workflow in place.
+    """
+    fixes = []
+    
+    for node_id, node_data in workflow.items():
+        if not isinstance(node_data, dict):
+            continue
+        
+        class_type = node_data.get("class_type", "")
+        inputs = node_data.get("inputs", {})
+        
+        if class_type not in object_info:
+            continue
+        
+        node_info = object_info[class_type]
+        all_inputs = {}
+        all_inputs.update(node_info.get("input", {}).get("required", {}))
+        all_inputs.update(node_info.get("input", {}).get("optional", {}))
+        
+        for input_name, input_spec in all_inputs.items():
+            if input_name not in inputs:
+                continue
+            
+            value = inputs[input_name]
+            
+            # Skip connection references
+            if isinstance(value, list) and len(value) == 2:
+                continue
+            
+            # input_spec is typically: [type_or_list, {config}] or [type_or_list]
+            if not isinstance(input_spec, (list, tuple)) or len(input_spec) < 1:
+                continue
+            
+            spec_type = input_spec[0]
+            spec_config = input_spec[1] if len(input_spec) > 1 else {}
+            
+            if not isinstance(spec_config, dict):
+                continue
+            
+            # Clamp numeric values
+            if isinstance(value, (int, float)):
+                min_val = spec_config.get("min")
+                max_val = spec_config.get("max")
+                
+                if max_val is not None and value > max_val:
+                    old_val = value
+                    inputs[input_name] = max_val
+                    fixes.append(
+                        f"Node #{node_id} ({class_type}): clamped '{input_name}' "
+                        f"from {old_val} to max {max_val}"
+                    )
+                elif min_val is not None and value < min_val:
+                    old_val = value
+                    inputs[input_name] = min_val
+                    fixes.append(
+                        f"Node #{node_id} ({class_type}): clamped '{input_name}' "
+                        f"from {old_val} to min {min_val}"
+                    )
+            
+            # Fix enum values (wrong string for a combo input)
+            if isinstance(spec_type, list) and isinstance(value, str):
+                if value not in spec_type and spec_type:
+                    # Try case-insensitive match
+                    lower_map = {s.lower(): s for s in spec_type}
+                    if value.lower() in lower_map:
+                        inputs[input_name] = lower_map[value.lower()]
+                        fixes.append(
+                            f"Node #{node_id} ({class_type}): fixed case of '{input_name}' "
+                            f"from '{value}' to '{lower_map[value.lower()]}'"
+                        )
+    
+    return workflow, fixes
+
+
 def extract_node_types_from_json(path: str) -> set[str]:
     """Quick extraction of class_types without full analysis."""
     with open(path, "r", encoding="utf-8") as f:

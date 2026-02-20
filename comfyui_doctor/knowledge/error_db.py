@@ -269,6 +269,43 @@ ERROR_PATTERNS: list[ErrorPattern] = [
         fix_description="Update custom node or check version compatibility",
     ),
 
+    # ━━━━ COMFYUI VALIDATION ERRORS ━━━━
+    ErrorPattern(
+        name="prompt_validation_missing_input",
+        category="validation_error",
+        regex=r"prompt_outputs_failed_validation.*?Required input is missing:\s*(\w+)",
+        description="Workflow has missing required inputs — incomplete node configuration",
+        fix_template=[],
+        fix_description="Workflow validation failed: required input '{input_name}' is missing. "
+                       "Open the workflow in ComfyUI UI to fill in required fields, or check the "
+                       "node's /object_info for required inputs.",
+    ),
+    ErrorPattern(
+        name="missing_node_type_http400",
+        category="missing_node",
+        regex=r"missing_node_type.*?Node '(\w+)' not found",
+        description="Node type not installed — ComfyUI returned HTTP 400",
+        fix_template=[],
+        fix_description="Node '{node_type}' is not loaded. Install the custom node package or restart ComfyUI.",
+    ),
+    ErrorPattern(
+        name="value_out_of_range",
+        category="validation_error",
+        regex=r"value_(?:bigger_than_max|smaller_than_min).*?Value ([\d.]+).*?(?:bigger than max of|smaller than min of) ([\d.]+).*?['\"]?(\w+)['\"]?",
+        description="Input value out of allowed range",
+        fix_template=[],
+        fix_description="Input '{input_name}' value {value} is out of range (limit: {limit}). "
+                       "Clamp to the allowed range.",
+    ),
+    ErrorPattern(
+        name="invalid_prompt_no_outputs",
+        category="validation_error",
+        regex=r"Prompt has no outputs",
+        description="Workflow has no output nodes (no SaveImage, PreviewImage, etc.)",
+        fix_template=[],
+        fix_description="Add an output node (SaveImage, PreviewImage, VHS_VideoCombine) to the workflow.",
+    ),
+
     # ━━━━ GENERIC FALLBACKS ━━━━
     ErrorPattern(
         name="generic_file_not_found",

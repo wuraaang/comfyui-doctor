@@ -10,6 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from comfyui_doctor.core.workflow import (
     load_workflow,
     analyze_workflow,
+    validate_inputs,
+    auto_fix_inputs,
     extract_node_types_from_json,
 )
 from comfyui_doctor.knowledge.error_db import match_error
@@ -165,6 +167,78 @@ def test_extract_types():
     print(f"✅ test_extract_types passed ({len(types)} types)")
 
 
+def test_validate_inputs():
+    """Test input validation against object_info."""
+    workflow = {
+        "1": {"class_type": "KSampler", "inputs": {"seed": 42}},
+    }
+    # Mock object_info with KSampler requiring more inputs
+    object_info = {
+        "KSampler": {
+            "input": {
+                "required": {
+                    "seed": ["INT", {"default": 0}],
+                    "steps": ["INT", {"default": 20}],
+                    "cfg": ["FLOAT", {"default": 7.0}],
+                    "model": ["MODEL"],
+                }
+            }
+        }
+    }
+    errors = validate_inputs(workflow, object_info)
+    assert len(errors) == 3  # steps, cfg, model missing
+    assert any("steps" in e for e in errors)
+    print(f"✅ test_validate_inputs passed ({len(errors)} errors)")
+
+
+def test_auto_fix_inputs():
+    """Test auto-fix: clamp values, fix enum case."""
+    workflow = {
+        "1": {"class_type": "TestNode", "inputs": {
+            "brightness": 1.5,      # Over max of 1.0
+            "contrast": -0.5,       # Under min of 0.0
+            "mode": "NEAREST",      # Wrong case
+            "normal_val": 0.5,      # Fine
+        }},
+    }
+    object_info = {
+        "TestNode": {
+            "input": {
+                "required": {
+                    "brightness": ["FLOAT", {"min": 0.0, "max": 1.0}],
+                    "contrast": ["FLOAT", {"min": 0.0, "max": 2.0}],
+                    "mode": [["nearest", "bilinear", "bicubic"]],
+                    "normal_val": ["FLOAT", {"min": 0.0, "max": 1.0}],
+                }
+            }
+        }
+    }
+    fixed_wf, fixes = auto_fix_inputs(workflow, object_info)
+    assert fixed_wf["1"]["inputs"]["brightness"] == 1.0  # Clamped to max
+    assert fixed_wf["1"]["inputs"]["contrast"] == 0.0    # Clamped to min
+    assert fixed_wf["1"]["inputs"]["mode"] == "nearest"   # Case fixed
+    assert fixed_wf["1"]["inputs"]["normal_val"] == 0.5   # Untouched
+    assert len(fixes) == 3
+    print(f"✅ test_auto_fix_inputs passed ({len(fixes)} fixes)")
+
+
+def test_error_matching_validation():
+    """Test matching of validation errors."""
+    # Test prompt_outputs_failed_validation
+    error = 'prompt_outputs_failed_validation Required input is missing: file_format'
+    matches = match_error(error)
+    assert len(matches) >= 1
+    assert any(m.pattern_name == "prompt_validation_missing_input" for m in matches)
+    print(f"✅ test_error_matching_validation passed")
+    
+    # Test missing_node_type HTTP 400
+    error2 = """missing_node_type Node 'FaceDetailer' not found"""
+    matches2 = match_error(error2)
+    assert len(matches2) >= 1
+    assert any(m.category == "missing_node" for m in matches2)
+    print(f"✅ test_error_matching_missing_node_http400 passed")
+
+
 if __name__ == "__main__":
     test_workflow_loading()
     test_workflow_analysis()
@@ -174,4 +248,7 @@ if __name__ == "__main__":
     test_node_lookup()
     test_model_lookup()
     test_extract_types()
+    test_validate_inputs()
+    test_auto_fix_inputs()
+    test_error_matching_validation()
     print("\n🎉 All tests passed!")

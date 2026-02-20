@@ -28,6 +28,8 @@ from .api import ComfyAPI
 from .workflow import (
     load_workflow,
     analyze_workflow,
+    validate_inputs,
+    auto_fix_inputs,
     WorkflowAnalysis,
 )
 from ..knowledge.error_db import match_error, ErrorMatch
@@ -413,6 +415,27 @@ class Doctor:
             return report
 
         workflow, _ = load_workflow(workflow_path)
+
+        # Pre-flight: validate and auto-fix inputs against /object_info
+        object_info = self.api.object_info()
+        if "error" not in object_info:
+            # Auto-fix: clamp out-of-range values, fix enum case
+            workflow, input_fixes = auto_fix_inputs(workflow, object_info)
+            if input_fixes:
+                console.print(f"\n🔧 [bold]Auto-fixed {len(input_fixes)} input values:[/bold]")
+                for fix in input_fixes:
+                    console.print(f"  → {fix}")
+                    report.fixes_applied.append(fix)
+            
+            # Validate remaining issues
+            validation_errors = validate_inputs(workflow, object_info)
+            if validation_errors:
+                console.print(f"\n⚠️  [yellow]{len(validation_errors)} input validation warnings:[/yellow]")
+                for err in validation_errors[:10]:
+                    console.print(f"  → {err}")
+                if len(validation_errors) > 10:
+                    console.print(f"  ... and {len(validation_errors) - 10} more")
+                console.print("  [dim]These may cause HTTP 400 when queuing.[/dim]")
 
         for attempt in range(1, self.max_retries + 1):
             report.attempts = attempt
