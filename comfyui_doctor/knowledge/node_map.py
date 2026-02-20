@@ -235,8 +235,34 @@ NODE_PACKAGES: dict[str, NodePackage] = {
 
 
 def lookup_node_type(class_type: str) -> Optional[NodePackage]:
-    """Find the package for a given node class_type."""
-    return NODE_PACKAGES.get(class_type)
+    """Find the package for a given node class_type.
+    
+    First checks our curated local map, then falls back to
+    ComfyUI-Manager's extension-node-map (31,000+ types).
+    """
+    # 1. Check local curated map first
+    local = NODE_PACKAGES.get(class_type)
+    if local:
+        return local
+    
+    # 2. Fallback to ComfyUI-Manager database
+    try:
+        from .manager_db import manager_lookup
+        manager_info = manager_lookup(class_type)
+        if manager_info:
+            # Skip if it's a built-in ComfyUI node (no install needed)
+            if manager_info.package_name in ("ComfyUI", "comfyui"):
+                return None  # Built-in, no action needed
+            return NodePackage(
+                repo_url=manager_info.repo_url,
+                package_name=manager_info.package_name,
+                pip_deps=[],  # Manager doesn't reliably track pip deps
+                description=f"[via ComfyUI-Manager] {manager_info.package_name}",
+            )
+    except Exception:
+        pass
+    
+    return None
 
 
 def lookup_multiple(class_types: set[str]) -> dict[str, Optional[NodePackage]]:

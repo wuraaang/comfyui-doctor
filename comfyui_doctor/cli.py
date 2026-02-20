@@ -17,6 +17,8 @@ from .core.doctor import Doctor, DoctorReport
 from .core.workflow import load_workflow, analyze_workflow, extract_node_types_from_json
 from .knowledge.error_db import match_error
 from .knowledge.model_map import lookup_model
+from .knowledge.node_map import lookup_node_type
+from .knowledge.manager_db import manager_lookup, get_map_stats
 
 app = typer.Typer(
     name="comfyui-doctor",
@@ -253,6 +255,33 @@ def status(
     # Node types
     types = api.registered_node_types()
     console.print(f"   Nodes: {len(types)} types registered")
+
+
+@app.command()
+def lookup(
+    node_type: str = typer.Argument(..., help="Node class_type to look up"),
+):
+    """🔎 Look up where to install a node type."""
+    # Try local map first
+    pkg = lookup_node_type(node_type)
+    
+    if pkg:
+        source = "[via ComfyUI-Manager]" if "[via ComfyUI-Manager]" in (pkg.description or "") else "[local db]"
+        console.print(f"\n🔎 [bold]{node_type}[/bold]  {source}")
+        console.print(f"   Package: {pkg.package_name}")
+        console.print(f"   Repo: {pkg.repo_url}")
+        if pkg.pip_deps:
+            console.print(f"   Pip deps: {', '.join(pkg.pip_deps)}")
+        if pkg.description:
+            console.print(f"   Info: {pkg.description}")
+        console.print(f"\n   Install: cd custom_nodes && git clone {pkg.repo_url}")
+    else:
+        console.print(f"\n❓ [bold]{node_type}[/bold] not found in any database")
+        console.print("   Try searching on GitHub or ComfyUI-Manager")
+    
+    # Show stats
+    stats = get_map_stats()
+    console.print(f"\n   [dim]Database: {stats['total_types']} types from {stats['total_repos']} repos[/dim]")
 
 
 @app.command()
