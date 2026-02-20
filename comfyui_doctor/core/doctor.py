@@ -27,6 +27,7 @@ from rich import print as rprint
 from .api import ComfyAPI
 from .workflow import (
     load_workflow,
+    convert_ui_to_api,
     analyze_workflow,
     validate_inputs,
     auto_fix_inputs,
@@ -183,16 +184,23 @@ class Doctor:
             console.print(f"  ❌ Failed to load: {e}")
             return report
 
-        if not is_api:
-            console.print("  ⚠️  UI format detected — converting to API format")
-            console.print("     (Some input values may not be fully parsed)")
-
         # 2. Get registered node types from ComfyUI
         registered = set()
+        object_info_data = {}
         if self.api.ping():
             console.print("  🟢 ComfyUI is running")
             registered = self.api.registered_node_types()
             console.print(f"  📦 {len(registered)} node types registered")
+            if not is_api:
+                # Convert UI → API using object_info for accurate widget mapping
+                console.print("  🔄 UI format detected — converting to API format")
+                object_info_data = self.api.object_info() or {}
+                workflow = convert_ui_to_api(
+                    json.loads(Path(workflow_path).read_text(encoding="utf-8")),
+                    object_info_data,
+                )
+                is_api = True  # Now it's API format
+                console.print(f"  ✅ Converted {len(workflow)} nodes to API format")
         else:
             console.print("  🔴 ComfyUI is not reachable — skipping node validation")
 

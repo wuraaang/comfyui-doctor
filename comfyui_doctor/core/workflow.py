@@ -67,6 +67,132 @@ MODEL_TYPE_MAP = {
 }
 
 
+# ── Connection types that come from wires, not widgets ─────────────────
+CONNECTION_TYPES = {
+    "MODEL", "CONDITIONING", "LATENT", "IMAGE", "MASK", "VAE", "CLIP",
+    "CONTROL_NET", "CLIP_VISION", "CLIP_VISION_OUTPUT", "STYLE_MODEL",
+    "GLIGEN", "UPSCALE_MODEL", "SAMPLER", "SIGMAS", "NOISE", "GUIDER",
+    "PHOTOMAKER", "IPADAPTER", "INSIGHTFACE", "WANVIDEOMODEL", "WANVAE",
+    "WANVIDEOTEXTEMBEDS", "WANVIDIMAGE_EMBEDS", "VHS_FILENAMES",
+    "AUDIO", "VHS_AUDIO",
+}
+
+
+def _convert_ui_to_api_basic(data: dict) -> dict:
+    """Convert UI-format workflow to API format (basic, no object_info).
+    
+    Reconstructs connections from the 'links' table and stores
+    widget_values for later reconstruction via object_info.
+    """
+    nodes_list = data.get("nodes", [])
+    links_list = data.get("links", [])
+    
+    # Build link lookup: link_id → (source_node_id, source_slot, target_type?)
+    link_map = {}
+    for link in links_list:
+        # link format: [link_id, origin_id, origin_slot, target_id, target_slot, type]
+        if isinstance(link, list) and len(link) >= 5:
+            link_id = link[0]
+            link_map[link_id] = {
+                "origin_id": str(link[1]),
+                "origin_slot": link[2],
+                "type": link[5] if len(link) > 5 else None,
+            }
+    
+    api_format = {}
+    for node in nodes_list:
+        node_id = str(node.get("id", ""))
+        node_type = node.get("type", "")
+        widgets_values = node.get("widgets_values", [])
+        
+        inputs = {}
+        
+        # Reconstruct connections from node inputs
+        node_inputs = node.get("inputs", [])  # UI inputs with links
+        for inp in node_inputs:
+            inp_name = inp.get("name", "")
+            link_id = inp.get("link")
+            if link_id is not None and link_id in link_map:
+                lnk = link_map[link_id]
+                inputs[inp_name] = [lnk["origin_id"], lnk["origin_slot"]]
+        
+        api_format[node_id] = {
+            "class_type": node_type,
+            "inputs": inputs,
+            "_ui_widgets": widgets_values,
+            "_ui_node": node,
+        }
+    
+    return api_format
+
+
+def convert_ui_to_api(data: dict, object_info: dict) -> dict:
+    """Convert UI-format workflow to full API format using /object_info.
+    
+    This is the accurate conversion that maps widget_values to the correct
+    input names using the node type definitions from ComfyUI's /object_info.
+    """
+    api_format = _convert_ui_to_api_basic(data)
+    
+    for node_id, node_data in api_format.items():
+        class_type = node_data["class_type"]
+        widgets = node_data.get("_ui_widgets", [])
+        ui_node = node_data.get("_ui_node", {})
+        
+        if class_type not in object_info or not widgets:
+            continue
+        
+        type_info = object_info[class_type]
+        required = type_info.get("input", {}).get("required", {})
+        optional = type_info.get("input", {}).get("optional", {})
+        
+        # Merge required + optional, preserving order
+        all_inputs = {}
+        all_inputs.update(required)
+        all_inputs.update(optional)
+        
+        # Build list of widget input names (skip connection-type inputs)
+        # Connection inputs come from wires, not widget values
+        connected_inputs = set(node_data["inputs"].keys())
+        
+        widget_names = []
+        for inp_name, inp_def in all_inputs.items():
+            # Skip if already connected via wire
+            if inp_name in connected_inputs:
+                continue
+            # Skip connection types
+            if isinstance(inp_def, list) and len(inp_def) >= 1:
+                type_str = inp_def[0] if isinstance(inp_def[0], str) else ""
+                if type_str in CONNECTION_TYPES:
+                    continue
+            widget_names.append(inp_name)
+        
+        # Map widget values to input names
+        wi = 0
+        for inp_name in widget_names:
+            if wi >= len(widgets):
+                break
+            val = widgets[wi]
+            # Skip "control_after_generate" phantom widgets
+            if val in ("fixed", "increment", "decrement", "randomize"):
+                wi += 1
+                # These phantom values follow seed/noise_seed inputs
+                continue
+            node_data["inputs"][inp_name] = val
+            wi += 1
+            # Check if next value is a control_after_generate for seed-like inputs
+            if inp_name in ("seed", "noise_seed") and wi < len(widgets):
+                next_val = widgets[wi]
+                if next_val in ("fixed", "increment", "decrement", "randomize"):
+                    wi += 1  # skip it
+        
+        # Clean up internal keys
+        node_data.pop("_ui_widgets", None)
+        node_data.pop("_ui_node", None)
+    
+    return api_format
+
+
 def load_workflow(path: str) -> tuple[dict, bool]:
     """Load workflow JSON. Returns (workflow_dict, is_api_format).
     
@@ -90,21 +216,7 @@ def load_workflow(path: str) -> tuple[dict, bool]:
 
     # UI format: has a "nodes" array
     if isinstance(data, dict) and "nodes" in data:
-        # Convert UI format to API format
-        api_format = {}
-        for node in data["nodes"]:
-            node_id = str(node.get("id", ""))
-            widgets_values = node.get("widgets_values", [])
-            node_type = node.get("type", "")
-            
-            # UI format doesn't have clean inputs like API format
-            # We store what we can
-            api_format[node_id] = {
-                "class_type": node_type,
-                "inputs": {},  # Would need object_info to reconstruct
-                "_ui_widgets": widgets_values,
-                "_ui_node": node,
-            }
+        api_format = _convert_ui_to_api_basic(data)
         return api_format, False
 
     raise ValueError(
