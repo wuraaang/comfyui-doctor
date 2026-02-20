@@ -221,9 +221,16 @@ class Doctor:
 
             # Generate fix actions
             for url, pkg in repos.items():
+                # Clone the repo + install its requirements.txt if it exists
+                clone_cmd = f"cd {self.custom_nodes_path} && git clone {pkg.repo_url}"
+                req_file = f"{self.custom_nodes_path}/{pkg.package_name}/requirements.txt"
+                install_cmd = (
+                    f"{clone_cmd} ; "
+                    f"test -f {req_file} && pip install -r {req_file} || true"
+                )
                 report.fixes_needed.append(FixAction(
                     description=f"Install {pkg.package_name}",
-                    commands=[f"cd {self.custom_nodes_path} && git clone {pkg.repo_url}"],
+                    commands=[install_cmd],
                     category="install_node",
                 ))
             
@@ -325,9 +332,24 @@ class Doctor:
                         if fix.category == "install_node":
                             installed_nodes = True
                     elif "already exists" in result.stderr:
-                        # Node already cloned — that's fine, it just needs a restart
-                        console.print(f"    ✅ Already installed (needs restart)")
-                        report.fixes_applied.append(f"{fix.description} (already present)")
+                        # Node already cloned — still run the deps part of the command
+                        # The command format is: "git clone ... ; test -f req && pip install -r req"
+                        # Re-run just the pip part
+                        console.print(f"    ✅ Already cloned, installing deps...")
+                        import re as _re
+                        # Extract package name from the command to find requirements.txt
+                        pkg_match = _re.search(r'custom_nodes/([^\s/]+)/requirements\.txt', cmd)
+                        if pkg_match:
+                            req_path = f"{self.custom_nodes_path}/{pkg_match.group(1)}/requirements.txt"
+                            dep_result = subprocess.run(
+                                f"test -f {req_path} && pip install -r {req_path} || true",
+                                shell=True, capture_output=True, text=True, timeout=300,
+                            )
+                            if dep_result.returncode == 0:
+                                console.print(f"    ✅ Deps installed")
+                            else:
+                                console.print(f"    ⚠️  Some deps failed")
+                        report.fixes_applied.append(f"{fix.description} (deps updated)")
                         if fix.category == "install_node":
                             installed_nodes = True
                     else:
