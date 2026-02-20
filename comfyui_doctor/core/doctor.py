@@ -600,16 +600,21 @@ class Doctor:
         return fixed_any
 
     def _download_command(self, info: ModelInfo) -> str:
-        """Generate download command for a model."""
+        """Generate download command for a model.
+        
+        Resolves HuggingFace/CivitAI redirections before aria2c
+        (aria2c multi-connection chokes on redirected URLs).
+        """
         dest = os.path.join(self.models_path, info.model_folder, info.filename)
         dest_dir = os.path.dirname(dest)
-        # Use aria2c for fast downloads, fall back to wget
+        # Resolve redirections first, then use aria2c for fast downloads
         return (
-            f"mkdir -p {dest_dir} && "
-            f"(command -v aria2c >/dev/null 2>&1 && "
+            f'mkdir -p "{dest_dir}" && '
+            f'RESOLVED_URL=$(curl -sI -L -o /dev/null -w "%{{url_effective}}" "{info.url}") && '
+            f'(command -v aria2c >/dev/null 2>&1 && '
             f'aria2c -x 16 -s 16 --max-connection-per-server=16 '
             f'--min-split-size=5M --file-allocation=none '
-            f'-d "{dest_dir}" -o "{info.filename}" "{info.url}" || '
+            f'-d "{dest_dir}" -o "{info.filename}" "$RESOLVED_URL" || '
             f'wget -q --show-progress -O "{dest}" "{info.url}")'
         )
 
