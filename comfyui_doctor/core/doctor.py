@@ -109,6 +109,63 @@ class Doctor:
     def models_path(self) -> str:
         return os.path.join(self.comfyui_path, "models")
 
+    # ── ComfyUI restart ───────────────────────────────────────────────
+
+    def restart_comfyui(self) -> bool:
+        """Restart ComfyUI to load newly installed nodes.
+        
+        Kills the current process and relaunches it.
+        Returns True if ComfyUI comes back up.
+        """
+        console.print("\n🔄 [bold yellow]Restarting ComfyUI to load new nodes...[/bold yellow]")
+        
+        if self.dry_run:
+            console.print("  [dim]DRY RUN: would restart ComfyUI[/dim]")
+            return True
+        
+        # Find and kill the current ComfyUI process
+        try:
+            result = subprocess.run(
+                "pgrep -f 'main.py.*--listen'",
+                shell=True, capture_output=True, text=True,
+            )
+            pids = result.stdout.strip().split('\n')
+            for pid in pids:
+                if pid.strip():
+                    subprocess.run(f"kill {pid.strip()}", shell=True, timeout=5)
+                    console.print(f"  🔪 Killed PID {pid.strip()}")
+        except Exception as e:
+            console.print(f"  ⚠️  Could not kill ComfyUI: {e}")
+        
+        time.sleep(3)
+        
+        # Relaunch
+        try:
+            subprocess.Popen(
+                f"cd {self.comfyui_path} && nohup python3 main.py --listen 0.0.0.0 --port 8188 > /tmp/comfyui.log 2>&1 &",
+                shell=True,
+            )
+            console.print("  🚀 ComfyUI relaunching...")
+        except Exception as e:
+            console.print(f"  ❌ Failed to relaunch: {e}")
+            return False
+        
+        # Wait for it to come back up
+        console.print("  ⏳ Waiting for ComfyUI to start...")
+        for i in range(60):  # Wait up to 60 seconds
+            time.sleep(2)
+            if self.api.ping():
+                # Extra wait for all nodes to register
+                time.sleep(5)
+                types = self.api.registered_node_types()
+                console.print(f"  ✅ ComfyUI is back! {len(types)} node types registered")
+                return True
+            if i % 5 == 0 and i > 0:
+                console.print(f"  ⏳ Still waiting... ({i*2}s)")
+        
+        console.print("  ❌ ComfyUI did not come back after 120s")
+        return False
+
     # ── Pre-flight analysis ───────────────────────────────────────────
 
     def analyze(self, workflow_path: str) -> DoctorReport:
@@ -245,6 +302,8 @@ class Doctor:
 
         console.print(f"\n🔧 [bold]Applying {len(auto_fixes)} fixes:[/bold]")
 
+        installed_nodes = False
+
         for fix in auto_fixes:
             console.print(f"\n  → {fix.description}")
             
@@ -263,6 +322,8 @@ class Doctor:
                     if result.returncode == 0:
                         console.print(f"    ✅ Done")
                         report.fixes_applied.append(fix.description)
+                        if fix.category == "install_node":
+                            installed_nodes = True
                     else:
                         stderr = result.stderr.strip()[-200:]
                         console.print(f"    ❌ Failed: {stderr}")
@@ -277,6 +338,10 @@ class Doctor:
                 except Exception as e:
                     console.print(f"    ❌ Error: {e}")
                     report.errors_encountered.append(str(e))
+
+        # Restart ComfyUI if we installed new nodes (they need a restart to load)
+        if installed_nodes and not self.dry_run:
+            self.restart_comfyui()
 
         return report
 
@@ -407,6 +472,19 @@ class Doctor:
 
     def _try_fix_error(self, error_text: str, report: DoctorReport) -> bool:
         """Try to fix an error using the knowledge base. Returns True if fix applied."""
+        # Special case: ComfyUI returns "missing_node_type" when nodes aren't loaded
+        # This means we installed nodes but didn't restart
+        if "missing_node_type" in error_text or "not found" in error_text.lower():
+            import re
+            m = re.search(r"Node '([^']+)' not found", error_text)
+            if m:
+                node_type = m.group(1)
+                console.print(f"  🔍 Missing node at runtime: [cyan]{node_type}[/cyan]")
+                console.print(f"     ComfyUI needs a restart to load newly installed nodes")
+                if self.restart_comfyui():
+                    return True
+                return False
+
         matches = match_error(error_text)
         
         if not matches:
@@ -415,6 +493,7 @@ class Doctor:
             return False
 
         fixed_any = False
+        need_restart = False
         for match in matches:
             console.print(f"  🔍 Matched: [cyan]{match.pattern_name}[/cyan]")
             console.print(f"     {match.fix_description}")
@@ -430,6 +509,8 @@ class Doctor:
                             console.print(f"     ✅ Fixed")
                             report.fixes_applied.append(match.fix_description)
                             fixed_any = True
+                            if match.category in ("missing_module", "missing_node"):
+                                need_restart = True
                         else:
                             console.print(f"     ❌ Fix failed: {result.stderr[:100]}")
                     except Exception as e:
@@ -441,6 +522,9 @@ class Doctor:
                 console.print("        - Replace VAEDecode with VAEDecodeTiled")
                 console.print("        - Enable FP8 quantization")
                 console.print("        - Reduce batch size to 1")
+
+        if need_restart and fixed_any:
+            self.restart_comfyui()
 
         return fixed_any
 
