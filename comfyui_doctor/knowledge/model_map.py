@@ -49,6 +49,11 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         "wai-illustrious-sdxl-v16.safetensors", 6.9, "checkpoints",
         "WAI Illustrious SDXL v16",
     ),
+    "illustriousXLV20_v20Stable.safetensors": ModelInfo(
+        "https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0/resolve/main/Illustrious-XL-v0.1.safetensors",
+        "illustriousXLV20_v20Stable.safetensors", 6.9, "checkpoints",
+        "Illustrious XL v2.0 Stable (mapped to v0.1 — update URL when available)",
+    ),
 
     # ━━━━ FLUX ━━━━
     "flux1-dev.safetensors": ModelInfo(
@@ -113,6 +118,11 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         "https://huggingface.co/uwg/upscaler/resolve/main/ESRGAN/4x-UltraSharp.pth",
         "4x-UltraSharp.pth", 0.07, "upscale_models",
         "4x UltraSharp upscaler",
+    ),
+    "4x-UltraSharpV2.safetensors": ModelInfo(
+        "https://huggingface.co/uwg/upscaler/resolve/main/ESRGAN/4x-UltraSharp.pth",
+        "4x-UltraSharpV2.safetensors", 0.07, "upscale_models",
+        "4x UltraSharp V2 upscaler (mapped to V1 — same model)",
     ),
     "RealESRGAN_x4plus.pth": ModelInfo(
         "https://huggingface.co/uwg/upscaler/resolve/main/ESRGAN/RealESRGAN_x4plus.pth",
@@ -188,6 +198,9 @@ def lookup_model(filename: str) -> Optional[ModelInfo]:
     # Exact match
     if filename in MODEL_REGISTRY:
         return MODEL_REGISTRY[filename]
+    
+    # Normalize Windows backslashes (e.g., "Illustrious\model.safetensors")
+    filename = filename.replace("\\", "/")
     
     # Try without path prefix (e.g., "bbox/face_yolov8m.pt" → "face_yolov8m.pt")
     basename = filename.split("/")[-1]
