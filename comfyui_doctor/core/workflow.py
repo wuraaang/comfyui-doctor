@@ -67,6 +67,12 @@ MODEL_TYPE_MAP = {
 }
 
 
+# ── UI-only node types to strip during conversion ──────────────────────
+UI_ONLY_TYPES = {
+    "Note", "PrimitiveNode", "Reroute",
+    "SetNode", "GetNode",  # ComfyUI-Workflow-Component
+}
+
 # ── Connection types that come from wires, not widgets ─────────────────
 CONNECTION_TYPES = {
     "MODEL", "CONDITIONING", "LATENT", "IMAGE", "MASK", "VAE", "CLIP",
@@ -99,11 +105,28 @@ def _convert_ui_to_api_basic(data: dict) -> dict:
                 "type": link[5] if len(link) > 5 else None,
             }
     
+    # Build PrimitiveNode value propagation map
+    # PrimitiveNode outputs a single value to connected nodes
+    primitive_values = {}  # link_id → value from PrimitiveNode widgets
+    for node in nodes_list:
+        if node.get("type") == "PrimitiveNode":
+            widgets = node.get("widgets_values", [])
+            outputs = node.get("outputs", [])
+            if widgets and outputs:
+                for out in outputs:
+                    for link_id in out.get("links", []):
+                        if link_id is not None:
+                            primitive_values[link_id] = widgets[0] if widgets else None
+    
     api_format = {}
     for node in nodes_list:
         node_id = str(node.get("id", ""))
         node_type = node.get("type", "")
         widgets_values = node.get("widgets_values", [])
+        
+        # Skip UI-only nodes
+        if node_type in UI_ONLY_TYPES:
+            continue
         
         inputs = {}
         
@@ -112,9 +135,14 @@ def _convert_ui_to_api_basic(data: dict) -> dict:
         for inp in node_inputs:
             inp_name = inp.get("name", "")
             link_id = inp.get("link")
-            if link_id is not None and link_id in link_map:
-                lnk = link_map[link_id]
-                inputs[inp_name] = [lnk["origin_id"], lnk["origin_slot"]]
+            if link_id is not None:
+                # Check if this comes from a PrimitiveNode
+                if link_id in primitive_values:
+                    inputs[inp_name] = primitive_values[link_id]
+                elif link_id in link_map:
+                    lnk = link_map[link_id]
+                    # Skip connections from UI-only nodes
+                    inputs[inp_name] = [lnk["origin_id"], lnk["origin_slot"]]
         
         api_format[node_id] = {
             "class_type": node_type,
