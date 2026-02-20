@@ -460,7 +460,8 @@ class Doctor:
             console.print(f"   Hint: cd {self.comfyui_path} && python main.py --listen")
             return report
 
-        workflow, _ = load_workflow(workflow_path)
+        # Use the already-converted workflow (not reload from file!)
+        # 'workflow' variable is set in Phase 1 (with UI→API conversion if needed)
 
         # Pre-flight: validate and auto-fix inputs against /object_info
         object_info = self.api.object_info()
