@@ -137,6 +137,33 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         "SAM ViT-B (Segment Anything)",
     ),
 
+    # ━━━━ Wan 2.1 Video ━━━━
+    "wan2.1_t2v_1.3B_bf16.safetensors": ModelInfo(
+        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_t2v_1.3B_bf16.safetensors",
+        "wan2.1_t2v_1.3B_bf16.safetensors", 2.7, "diffusion_models/wan",
+        "Wan 2.1 T2V 1.3B (smallest, text-to-video)",
+    ),
+    "wan2.1_t2v_14B_bf16.safetensors": ModelInfo(
+        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_t2v_14B_bf16.safetensors",
+        "wan2.1_t2v_14B_bf16.safetensors", 28.0, "diffusion_models/wan",
+        "Wan 2.1 T2V 14B (full, text-to-video)",
+    ),
+    "wan2.1_i2v_720p_14B_bf16.safetensors": ModelInfo(
+        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_i2v_720p_14B_bf16.safetensors",
+        "wan2.1_i2v_720p_14B_bf16.safetensors", 28.0, "diffusion_models/wan",
+        "Wan 2.1 I2V 720p 14B (image-to-video)",
+    ),
+    "wan_2.1_vae.safetensors": ModelInfo(
+        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors",
+        "wan_2.1_vae.safetensors", 0.2, "vae/wan",
+        "Wan 2.1 VAE",
+    ),
+    "umt5-xxl-enc-bf16.safetensors": ModelInfo(
+        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5-xxl-enc-bf16.safetensors",
+        "umt5-xxl-enc-bf16.safetensors", 9.8, "text_encoders",
+        "UMT5-XXL text encoder for Wan 2.1",
+    ),
+
     # ━━━━ IP-Adapter ━━━━
     "ip-adapter-plus_sd15.safetensors": ModelInfo(
         "https://huggingface.co/h94/IP-Adapter/resolve/main/models/ip-adapter-plus_sd15.safetensors",

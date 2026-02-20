@@ -108,16 +108,31 @@ NODE_PACKAGES: dict[str, NodePackage] = {
     ),
 
     # ━━━━ ComfyUI-WanVideoWrapper ━━━━
-    "DownloadAndLoadWanModel": NodePackage(
+    "WanVideoModelLoader": NodePackage(
         "https://github.com/kijai/ComfyUI-WanVideoWrapper",
         "ComfyUI-WanVideoWrapper",
         ["accelerate", "diffusers"],
-        "Wan video generation wrapper",
+        "Wan 2.1 video generation wrapper (kijai)",
     ),
     "WanVideoSampler": NodePackage(
         "https://github.com/kijai/ComfyUI-WanVideoWrapper",
         "ComfyUI-WanVideoWrapper",
         ["accelerate", "diffusers"],
+    ),
+    "WanVideoTextEncode": NodePackage(
+        "https://github.com/kijai/ComfyUI-WanVideoWrapper",
+        "ComfyUI-WanVideoWrapper",
+        [],
+    ),
+    "WanVideoDecode": NodePackage(
+        "https://github.com/kijai/ComfyUI-WanVideoWrapper",
+        "ComfyUI-WanVideoWrapper",
+        [],
+    ),
+    "WanImageToVideo": NodePackage(
+        "https://github.com/kijai/ComfyUI-WanVideoWrapper",
+        "ComfyUI-WanVideoWrapper",
+        [],
     ),
 
     # ━━━━ ComfyUI-VideoHelperSuite ━━━━
