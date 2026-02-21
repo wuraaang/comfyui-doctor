@@ -20,6 +20,8 @@ from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .llm import LLMClient
+    from .mcp_client import MCPConnection
+    from .auth import TokenManager
 
 from rich.console import Console
 from rich.panel import Panel
@@ -72,6 +74,8 @@ class DoctorReport:
     fixes_needed: list[FixAction] = field(default_factory=list)
     fixes_applied: list[str] = field(default_factory=list)
     errors_encountered: list[str] = field(default_factory=list)
+    llm_suggestions: list[str] = field(default_factory=list)
+    escalated_to_llm: bool = False
     success: bool = False
     attempts: int = 0
 
@@ -87,6 +91,9 @@ class Doctor:
         auto_fix: bool = True,
         dry_run: bool = False,
         llm_client: Optional["LLMClient"] = None,
+        mcp_client: Optional["MCPConnection"] = None,
+        token_manager: Optional["TokenManager"] = None,
+        verbose: bool = False,
     ):
         self.api = ComfyAPI(url=comfyui_url)
         self.comfyui_path = comfyui_path or self._detect_comfyui_path()
@@ -94,6 +101,34 @@ class Doctor:
         self.auto_fix = auto_fix
         self.dry_run = dry_run
         self.llm_client = llm_client
+        self.mcp_client = mcp_client
+        self.verbose = verbose
+
+        # Token manager for HF/CivitAI
+        if token_manager is None:
+            from .auth import TokenManager
+            self.token_manager = TokenManager()
+        else:
+            self.token_manager = token_manager
+
+        # Auto-detect MCP if not provided
+        if mcp_client is None:
+            self._try_connect_mcp()
+        else:
+            self.mcp_client = mcp_client
+
+    def _try_connect_mcp(self):
+        """Try to connect to Comfy-Pilot MCP server."""
+        try:
+            from .mcp_client import MCPConnection
+            mcp = MCPConnection()
+            if mcp.connect():
+                self.mcp_client = mcp
+                console.print("  🔗 [dim]Connected to Comfy-Pilot MCP[/dim]")
+            else:
+                self.mcp_client = None
+        except Exception:
+            self.mcp_client = None
 
     def _detect_comfyui_path(self) -> str:
         """Try to auto-detect ComfyUI installation path."""
@@ -339,12 +374,43 @@ class Doctor:
                         report.fixes_applied.append(f"Replaced {orig} → {repl.replacement}")
                 
                 if still_unknown:
-                    report.fixes_needed.append(FixAction(
-                        description=f"Lookup unknown nodes via ComfyUI-Manager: {', '.join(still_unknown)}",
-                        commands=[],
-                        category="lookup_node",
-                        auto=False,
-                    ))
+                    # Escalation Point 1: Try LLM for unknown node types
+                    if self.llm_client:
+                        for ut in list(still_unknown):
+                            console.print(f"     🤖 Asking LLM about [cyan]{ut}[/cyan]...")
+                            pkg = self.llm_client.find_node_package(ut)
+                            if pkg:
+                                console.print(f"     🤖 LLM found: [green]{pkg.package_name}[/green] ({pkg.repo_url})")
+                                report.escalated_to_llm = True
+                                report.llm_suggestions.append(f"Found {ut} → {pkg.package_name}")
+                                clone_cmd = f"cd {self.custom_nodes_path} && git clone {pkg.repo_url}"
+                                req_file = f"{self.custom_nodes_path}/{pkg.package_name}/requirements.txt"
+                                install_cmd = (
+                                    f"{clone_cmd} ; "
+                                    f"test -f {req_file} && pip install -r {req_file} || true"
+                                )
+                                report.fixes_needed.append(FixAction(
+                                    description=f"Install {pkg.package_name} [LLM]",
+                                    commands=[install_cmd],
+                                    category="install_node",
+                                ))
+                                for dep in pkg.pip_deps:
+                                    report.fixes_needed.append(FixAction(
+                                        description=f"Install pip: {dep} [LLM]",
+                                        commands=[f"pip install {dep}"],
+                                        category="install_pip",
+                                    ))
+                                still_unknown.remove(ut)
+                            else:
+                                console.print(f"     🤖 LLM couldn't find package for {ut}")
+
+                    if still_unknown:
+                        report.fixes_needed.append(FixAction(
+                            description=f"Lookup unknown nodes: {', '.join(still_unknown)}",
+                            commands=[],
+                            category="lookup_node",
+                            auto=False,
+                        ))
         else:
             if registered:
                 console.print("  ✅ All node types are installed")
@@ -385,14 +451,37 @@ class Doctor:
                             category="download_model",
                         ))
                     else:
-                        report.unknown_models.append(ref)
-                        console.print(f"     ❓ {filename} → [yellow]unknown model, search manually[/yellow]")
-                        report.fixes_needed.append(FixAction(
-                            description=f"Find and download: {filename}",
-                            commands=[],
-                            category="download_model",
-                            auto=False,
-                        ))
+                        # Escalation Point 2: Try LLM for unknown models
+                        llm_info = None
+                        if self.llm_client:
+                            console.print(f"     🤖 Asking LLM about [cyan]{filename}[/cyan]...")
+                            llm_info = self.llm_client.find_model(
+                                filename,
+                                node_type=ref.get("node_type", ""),
+                                model_folder=folder,
+                            )
+                        if llm_info:
+                            console.print(
+                                f"     🤖 LLM found: [green]{llm_info.url[:60]}...[/green] "
+                                f"({llm_info.size_gb}GB)"
+                            )
+                            report.known_models.append({**ref, "download_info": llm_info})
+                            report.escalated_to_llm = True
+                            report.llm_suggestions.append(f"Found model {filename}")
+                            report.fixes_needed.append(FixAction(
+                                description=f"Download {filename} ({llm_info.size_gb}GB) [LLM]",
+                                commands=[self._download_command(llm_info)],
+                                category="download_model",
+                            ))
+                        else:
+                            report.unknown_models.append(ref)
+                            console.print(f"     ❓ {filename} → [yellow]unknown model[/yellow]")
+                            report.fixes_needed.append(FixAction(
+                                description=f"Find and download: {filename}",
+                                commands=[],
+                                category="download_model",
+                                auto=False,
+                            ))
 
         # 6. Connection errors
         if analysis.connection_errors:
@@ -647,6 +736,27 @@ class Doctor:
                                 )
                 if has_quality_issue:
                     console.print("  ⚠️  [yellow]Some outputs may be blank — check the images![/yellow]")
+                    # Escalation Point 4: LLM for quality issues
+                    if self.llm_client and attempt < self.max_retries:
+                        console.print("  🤖 Asking LLM to diagnose quality issue...")
+                        resp = self.llm_client.diagnose_quality(
+                            {"blank": True},
+                            workflow,
+                        )
+                        if resp.text:
+                            report.escalated_to_llm = True
+                            report.llm_suggestions.append(f"Quality: {resp.reasoning or resp.text[:100]}")
+                            # Parse and apply workflow mutations
+                            parsed = self.llm_client._parse_response(resp.text)
+                            mutations = parsed.get("workflow_mutations", [])
+                            if mutations:
+                                from .llm import LLMClient
+                                workflow, changes = LLMClient.apply_mutations(workflow, mutations)
+                                for ch in changes:
+                                    console.print(f"  🤖 {ch}")
+                                    report.fixes_applied.append(f"[LLM/Quality] {ch}")
+                                console.print("  🔄 Retrying with mutations...")
+                                continue
                 report.success = True
                 return report
 
@@ -694,9 +804,21 @@ class Doctor:
                 return False
 
         matches = match_error(error_text)
-        
+
         if not matches:
-            console.print("  🤷 Error not recognized in knowledge base")
+            # Escalation Point 3: LLM for unrecognized errors
+            if self.llm_client:
+                console.print("  🤖 [yellow]Error not in knowledge base — asking LLM...[/yellow]")
+                resp = self.llm_client.diagnose_error(error_text)
+                if resp.fix_actions and resp.confidence >= 0.5:
+                    report.escalated_to_llm = True
+                    report.llm_suggestions.append(resp.reasoning)
+                    if self.verbose:
+                        console.print(f"  🤖 LLM reasoning: {resp.reasoning}")
+                    return self._apply_llm_fixes(resp, report)
+                elif resp.reasoning:
+                    console.print(f"  🤖 LLM: {resp.reasoning[:200]}")
+            console.print("  🤷 Error not recognized")
             console.print(f"  [dim]{error_text[:300]}[/dim]")
             return False
 
@@ -725,15 +847,70 @@ class Doctor:
                         console.print(f"     ❌ Error: {e}")
 
             elif match.category == "cuda_oom":
-                console.print("     💡 Suggestions:")
-                console.print("        - Lower resolution in the workflow")
-                console.print("        - Replace VAEDecode with VAEDecodeTiled")
-                console.print("        - Enable FP8 quantization")
-                console.print("        - Reduce batch size to 1")
+                # Escalation Point 5: LLM for OOM
+                if self.llm_client:
+                    console.print("     🤖 Asking LLM to reduce VRAM usage...")
+                    vram_gb = 0
+                    try:
+                        stats = self.api.system_stats()
+                        devices = stats.get("devices", [])
+                        if devices:
+                            vram_gb = devices[0].get("vram_total", 0) / (1024**3)
+                    except Exception:
+                        pass
+                    resp = self.llm_client.fix_oom({}, vram_gb, error_text)
+                    if resp.fix_actions:
+                        report.escalated_to_llm = True
+                        return self._apply_llm_fixes(resp, report)
+                else:
+                    console.print("     💡 Suggestions:")
+                    console.print("        - Lower resolution in the workflow")
+                    console.print("        - Replace VAEDecode with VAEDecodeTiled")
+                    console.print("        - Enable FP8 quantization")
+                    console.print("        - Reduce batch size to 1")
+
+            elif not match.fix_commands:
+                # Escalation Point 6: empty fix_commands → LLM
+                if self.llm_client:
+                    console.print("     🤖 No auto-fix available — asking LLM...")
+                    resp = self.llm_client.diagnose_error(
+                        error_text,
+                        system_info={"matched_pattern": match.pattern_name},
+                    )
+                    if resp.fix_actions:
+                        report.escalated_to_llm = True
+                        return self._apply_llm_fixes(resp, report)
 
         if need_restart and fixed_any:
             self.restart_comfyui()
 
+        return fixed_any
+
+    def _apply_llm_fixes(self, resp, report: "DoctorReport") -> bool:
+        """Apply fix actions from an LLM response."""
+        from .llm import LLMClient, WorkflowMutation
+        fixed_any = False
+        for fa in resp.fix_actions:
+            console.print(f"     🤖 {fa.description}")
+            report.llm_suggestions.append(fa.description)
+            if fa.commands and not self.dry_run:
+                for cmd in fa.commands:
+                    console.print(f"        $ {cmd}")
+                    try:
+                        result = subprocess.run(
+                            cmd, shell=True, capture_output=True, text=True, timeout=300,
+                        )
+                        if result.returncode == 0:
+                            console.print(f"        ✅ Done")
+                            report.fixes_applied.append(f"[LLM] {fa.description}")
+                            fixed_any = True
+                        else:
+                            console.print(f"        ❌ Failed: {result.stderr[:100]}")
+                    except Exception as e:
+                        console.print(f"        ❌ Error: {e}")
+            elif self.dry_run:
+                report.fixes_applied.append(f"[DRY/LLM] {fa.description}")
+                fixed_any = True
         return fixed_any
 
     def _verify_download(self, info: ModelInfo) -> bool:
@@ -782,21 +959,52 @@ class Doctor:
 
     def _download_command(self, info: ModelInfo) -> str:
         """Generate download command for a model.
-        
+
         Resolves HuggingFace/CivitAI redirections before aria2c
         (aria2c multi-connection chokes on redirected URLs).
+        Injects auth headers for HuggingFace and CivitAI tokens.
         """
         dest = os.path.join(self.models_path, info.model_folder, info.filename)
         dest_dir = os.path.dirname(dest)
-        # Resolve redirections first, then use aria2c for fast downloads
+        url = info.url
+
+        # Inject tokens for authenticated downloads
+        curl_auth = ""
+        aria2c_auth = ""
+        wget_auth = ""
+
+        if info.hf_token_required or "huggingface.co" in url:
+            hf_token = self.token_manager.get_token("huggingface")
+            if not hf_token:
+                hf_token = self.token_manager.prompt_for_token(
+                    "huggingface",
+                    reason=f"Model {info.filename} requires HuggingFace authentication",
+                )
+            if hf_token:
+                curl_auth = f'-H "Authorization: Bearer {hf_token}" '
+                aria2c_auth = f'--header="Authorization: Bearer {hf_token}" '
+                wget_auth = f'--header="Authorization: Bearer {hf_token}" '
+
+        if "civitai.com" in url:
+            civitai_token = self.token_manager.get_token("civitai")
+            if not civitai_token:
+                civitai_token = self.token_manager.prompt_for_token(
+                    "civitai",
+                    reason=f"CivitAI requires authentication to download {info.filename}",
+                )
+            if civitai_token:
+                # CivitAI uses query param for token
+                sep = "&" if "?" in url else "?"
+                url = f"{url}{sep}token={civitai_token}"
+
         return (
             f'mkdir -p "{dest_dir}" && '
-            f'RESOLVED_URL=$(curl -sI -L -o /dev/null -w "%{{url_effective}}" "{info.url}") && '
+            f'RESOLVED_URL=$(curl -sI -L {curl_auth}-o /dev/null -w "%{{url_effective}}" "{url}") && '
             f'(command -v aria2c >/dev/null 2>&1 && '
             f'aria2c -x 16 -s 16 --max-connection-per-server=16 '
-            f'--min-split-size=5M --file-allocation=none '
+            f'--min-split-size=5M --file-allocation=none {aria2c_auth}'
             f'-d "{dest_dir}" -o "{info.filename}" "$RESOLVED_URL" || '
-            f'wget -q --show-progress -O "{dest}" "{info.url}")'
+            f'wget -q --show-progress {wget_auth}-O "{dest}" "{url}")'
         )
 
     def _check_image_quality(self, filename: str, subfolder: str = "") -> dict:

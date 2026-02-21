@@ -37,14 +37,42 @@ def get_doctor(
     retries: int = 3,
     auto_fix: bool = True,
     dry_run: bool = False,
+    no_llm: bool = False,
+    verbose: bool = False,
 ) -> Doctor:
+    """Create a Doctor instance, optionally with LLM client."""
+    llm_client = None
+    if not no_llm:
+        llm_client = _try_create_llm_client()
+
     return Doctor(
         comfyui_url=url,
         comfyui_path=path,
         max_retries=retries,
         auto_fix=auto_fix,
         dry_run=dry_run,
+        llm_client=llm_client,
+        verbose=verbose,
     )
+
+
+def _try_create_llm_client():
+    """Try to create an LLM client from auth config."""
+    try:
+        from .core.auth import AuthManager
+        from .core.llm import LLMClient
+
+        auth = AuthManager()
+        if auth.is_authenticated():
+            config = auth.load_config()
+            client = LLMClient(
+                proxy_url=config.proxy_url,
+                auth_token=config.token,
+            )
+            return client
+    except Exception:
+        pass
+    return None
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -60,6 +88,9 @@ def run(
     retries: int = typer.Option(3, "--retries", "-r", help="Max auto-fix retries"),
     no_fix: bool = typer.Option(False, "--no-fix", help="Disable auto-fix"),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Analyze only, don't execute"),
+    no_llm: bool = typer.Option(False, "--no-llm", help="Disable LLM escalation"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show LLM reasoning"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Auto-accept prompts"),
 ):
     """🚀 Run a workflow with auto-fix. The one-shot magic."""
     console.print(Panel(
@@ -73,7 +104,15 @@ def run(
         console.print(f"❌ File not found: {workflow}")
         raise typer.Exit(1)
 
-    doctor = get_doctor(url, path, retries, auto_fix=not no_fix, dry_run=dry_run)
+    doctor = get_doctor(url, path, retries, auto_fix=not no_fix, dry_run=dry_run,
+                        no_llm=no_llm, verbose=verbose)
+
+    # Show LLM status
+    if doctor.llm_client:
+        console.print("  🤖 [dim]LLM escalation enabled[/dim]")
+    if doctor.mcp_client:
+        console.print("  🔗 [dim]MCP connected[/dim]")
+
     report = doctor.run(workflow)
 
     # Summary
@@ -194,17 +233,17 @@ def nodes(
         raise typer.Exit(1)
 
     types = extract_node_types_from_json(workflow)
-    
+
     table = Table(title=f"Node types in {workflow}")
     table.add_column("Class Type", style="cyan")
     table.add_column("Count", justify="right")
-    
+
     # Count occurrences
     with open(workflow) as f:
         data = json.load(f)
     if "prompt" in data:
         data = data["prompt"]
-    
+
     type_counts = {}
     for node_data in data.values():
         if isinstance(node_data, dict) and "class_type" in node_data:
@@ -222,7 +261,7 @@ def nodes(
 def status(
     url: str = typer.Option("http://127.0.0.1:8188", "--url", "-u", help="ComfyUI URL"),
 ):
-    """📊 Show ComfyUI status (queue, GPU, etc.)."""
+    """📊 Show ComfyUI status (queue, GPU, LLM, MCP)."""
     api = ComfyAPI(url=url)
 
     if not api.ping():
@@ -236,7 +275,7 @@ def status(
 
     console.print(f"\n🟢 [bold]ComfyUI[/bold] at {url}")
     console.print(f"   OS: {system.get('os', '?')} | Python {system.get('python_version', '?')}")
-    
+
     for i, dev in enumerate(devices):
         name = dev.get("name", "GPU")
         vram_total = dev.get("vram_total", 0) / (1024**3)
@@ -256,6 +295,52 @@ def status(
     types = api.registered_node_types()
     console.print(f"   Nodes: {len(types)} types registered")
 
+    # LLM status
+    llm_client = _try_create_llm_client()
+    if llm_client:
+        available = llm_client.is_available()
+        status_str = "[green]connected[/green]" if available else "[yellow]configured but unreachable[/yellow]"
+        console.print(f"\n   🤖 LLM: {status_str}")
+        # Quota
+        try:
+            from .core.auth import AuthManager
+            auth = AuthManager()
+            quota = auth.get_quota()
+            if quota:
+                remaining = quota.get("remaining", "?")
+                total = quota.get("total", "?")
+                console.print(f"      Quota: {remaining}/{total} requests remaining")
+        except Exception:
+            pass
+    else:
+        console.print(f"\n   🤖 LLM: [dim]not configured (run `comfyui-doctor login`)[/dim]")
+
+    # MCP status
+    try:
+        from .core.mcp_client import MCPConnection
+        mcp = MCPConnection()
+        if mcp.connect():
+            tools = mcp.list_tools()
+            console.print(f"   🔗 MCP: [green]connected[/green] ({len(tools)} tools)")
+        else:
+            console.print(f"   🔗 MCP: [dim]not available[/dim]")
+    except Exception:
+        console.print(f"   🔗 MCP: [dim]not available[/dim]")
+
+    # Tokens
+    try:
+        from .core.auth import TokenManager
+        tm = TokenManager()
+        masked = tm.list_tokens()
+        if masked:
+            console.print(f"\n   🔑 Tokens:")
+            for service, token_str in masked.items():
+                console.print(f"      {service}: {token_str}")
+        else:
+            console.print(f"\n   🔑 Tokens: [dim]none configured[/dim]")
+    except Exception:
+        pass
+
 
 @app.command()
 def lookup(
@@ -264,7 +349,7 @@ def lookup(
     """🔎 Look up where to install a node type."""
     # Try local map first
     pkg = lookup_node_type(node_type)
-    
+
     if pkg:
         source = "[via ComfyUI-Manager]" if "[via ComfyUI-Manager]" in (pkg.description or "") else "[local db]"
         console.print(f"\n🔎 [bold]{node_type}[/bold]  {source}")
@@ -278,10 +363,88 @@ def lookup(
     else:
         console.print(f"\n❓ [bold]{node_type}[/bold] not found in any database")
         console.print("   Try searching on GitHub or ComfyUI-Manager")
-    
+
     # Show stats
     stats = get_map_stats()
     console.print(f"\n   [dim]Database: {stats['total_types']} types from {stats['total_repos']} repos[/dim]")
+
+
+@app.command()
+def login(
+    email: str = typer.Argument(..., help="Your email address"),
+    proxy_url: str = typer.Option(
+        "https://api.comfyui-doctor.com", "--proxy", help="LLM proxy URL"
+    ),
+):
+    """🔑 Login to enable LLM-powered auto-fix."""
+    from .core.auth import AuthManager
+
+    console.print(Panel(
+        "[bold]🔑 ComfyUI Doctor — Login[/bold]",
+        border_style="cyan",
+    ))
+
+    auth = AuthManager()
+    if auth.login(email, proxy_url):
+        console.print("\n✅ You're logged in! LLM escalation is now enabled.")
+        console.print("   Run `comfyui-doctor status` to verify.")
+    else:
+        console.print("\n❌ Login failed.")
+        raise typer.Exit(1)
+
+
+@app.command()
+def tokens(
+    action: str = typer.Argument("list", help="Action: list, set, delete"),
+    service: Optional[str] = typer.Argument(None, help="Service: huggingface, civitai"),
+    token: Optional[str] = typer.Option(None, "--token", "-t", help="Token value (for set)"),
+):
+    """🔑 Manage API tokens (HuggingFace, CivitAI)."""
+    from .core.auth import TokenManager
+
+    tm = TokenManager()
+
+    if action == "list":
+        masked = tm.list_tokens()
+        if not masked:
+            console.print("No tokens configured.")
+            console.print("\nAvailable services:")
+            for svc, info in tm.SERVICES.items():
+                console.print(f"  {svc}: {info['description']}")
+            console.print(f"\nSet a token: comfyui-doctor tokens set <service> --token <value>")
+            return
+
+        table = Table(title="API Tokens")
+        table.add_column("Service", style="cyan")
+        table.add_column("Token")
+        table.add_column("Get token at")
+        for svc, val in masked.items():
+            info = tm.SERVICES.get(svc, {})
+            table.add_row(svc, val, info.get("url", ""))
+        console.print(table)
+
+    elif action == "set":
+        if not service:
+            console.print("Usage: comfyui-doctor tokens set <service> --token <value>")
+            console.print(f"Services: {', '.join(tm.SERVICES.keys())}")
+            raise typer.Exit(1)
+        if token:
+            tm.set_token(service, token)
+            console.print(f"✅ Token set for {service}")
+        else:
+            tm.prompt_for_token(service)
+
+    elif action == "delete":
+        if not service:
+            console.print("Usage: comfyui-doctor tokens delete <service>")
+            raise typer.Exit(1)
+        tm.delete_token(service)
+        console.print(f"✅ Token deleted for {service}")
+
+    else:
+        console.print(f"Unknown action: {action}")
+        console.print("Available: list, set, delete")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -303,24 +466,27 @@ def _print_summary(report: DoctorReport):
 
     table.add_row("Workflow", report.workflow_path)
     table.add_row("Nodes", f"{report.total_nodes} ({report.required_types} unique types)")
-    
+
     if report.missing_nodes:
         table.add_row("Missing nodes", f"[red]{len(report.missing_nodes)}[/red]")
-    
+
     if report.known_models:
         table.add_row("Models to download", f"[yellow]{len(report.known_models)}[/yellow]")
-    
+
     if report.unknown_models:
         table.add_row("Unknown models", f"[red]{len(report.unknown_models)}[/red]")
-    
+
     if report.fixes_applied:
         table.add_row("Fixes applied", f"[green]{len(report.fixes_applied)}[/green]")
 
     if report.errors_encountered:
         table.add_row("Errors", f"[red]{len(report.errors_encountered)}[/red]")
 
+    if report.escalated_to_llm:
+        table.add_row("LLM escalation", f"[cyan]{len(report.llm_suggestions)} suggestions[/cyan]")
+
     table.add_row("Attempts", str(report.attempts))
-    
+
     status = "[green bold]✅ SUCCESS[/green bold]" if report.success else "[red bold]❌ FAILED[/red bold]"
     table.add_row("Result", status)
 
