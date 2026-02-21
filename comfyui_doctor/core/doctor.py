@@ -117,36 +117,70 @@ class Doctor:
 
     def restart_comfyui(self) -> bool:
         """Restart ComfyUI to load newly installed nodes.
-        
-        Kills the current process and relaunches it.
+
+        Kills the current process and relaunches it with the same flags.
         Returns True if ComfyUI comes back up.
         """
         console.print("\n🔄 [bold yellow]Restarting ComfyUI to load new nodes...[/bold yellow]")
-        
+
         if self.dry_run:
             console.print("  [dim]DRY RUN: would restart ComfyUI[/dim]")
             return True
-        
+
+        # Capture original launch flags before killing
+        original_flags = ""
+        try:
+            result = subprocess.run(
+                "pgrep -af 'main.py'",
+                shell=True, capture_output=True, text=True,
+            )
+            for line in result.stdout.strip().split('\n'):
+                if 'main.py' in line and 'pgrep' not in line:
+                    # Extract everything after main.py
+                    import re as _re
+                    flag_match = _re.search(r'main\.py\s+(.*)', line)
+                    if flag_match:
+                        original_flags = flag_match.group(1).strip()
+                        console.print(f"  📋 Saved original flags: {original_flags}")
+                    break
+        except Exception:
+            pass
+
         # Find and kill the current ComfyUI process
         try:
             result = subprocess.run(
-                "pgrep -f 'main.py.*--listen'",
+                "pgrep -f 'main.py'",
                 shell=True, capture_output=True, text=True,
             )
             pids = result.stdout.strip().split('\n')
+            my_pid = str(os.getpid())
             for pid in pids:
-                if pid.strip():
-                    subprocess.run(f"kill {pid.strip()}", shell=True, timeout=5)
-                    console.print(f"  🔪 Killed PID {pid.strip()}")
+                pid = pid.strip()
+                if pid and pid != my_pid:
+                    subprocess.run(f"kill {pid}", shell=True, timeout=5)
+                    console.print(f"  🔪 Killed PID {pid}")
         except Exception as e:
             console.print(f"  ⚠️  Could not kill ComfyUI: {e}")
-        
+
         time.sleep(3)
-        
+
+        # Find the right python binary
+        python_bin = sys.executable or "python3"
+
+        # Use original flags if captured, otherwise build sensible defaults
+        if not original_flags:
+            port = "8188"
+            import re as _re
+            port_match = _re.search(r":(\d+)", self.api.url)
+            if port_match:
+                port = port_match.group(1)
+            original_flags = f"--listen 0.0.0.0 --port {port} --highvram"
+            console.print(f"  📋 Using default flags: {original_flags}")
+
         # Relaunch
         try:
             subprocess.Popen(
-                f"cd {self.comfyui_path} && nohup python3 main.py --listen 0.0.0.0 --port 8188 > /tmp/comfyui.log 2>&1 &",
+                f"cd {self.comfyui_path} && nohup {python_bin} main.py {original_flags} > /tmp/comfyui.log 2>&1 &",
                 shell=True,
             )
             console.print("  🚀 ComfyUI relaunching...")
@@ -271,12 +305,13 @@ class Doctor:
                                           if nd.get("class_type") == orig]
                         for nid in nodes_to_remove:
                             del workflow[nid]
-                        report.fixes_applied += 1
+                        report.fixes_applied.append(f"Removed UI-only node: {orig}")
                     else:
                         console.print(f"     🔄 {orig} → [green]{repl.replacement}[/green] ({repl.description})")
                         if repl.notes:
                             console.print(f"        ⚠️  {repl.notes}")
                         # Apply replacement in workflow
+                        replaced_node_ids = []
                         for nid, nd in workflow.items():
                             if nd.get("class_type") == orig:
                                 nd["class_type"] = repl.replacement
@@ -287,7 +322,16 @@ class Doctor:
                                     new_key = repl.input_mapping.get(k, k)
                                     new_inputs[new_key] = v
                                 nd["inputs"] = new_inputs
-                        report.fixes_applied += 1
+                                replaced_node_ids.append(nid)
+                        # Remap output slot references if output_mapping is defined
+                        if repl.output_mapping and replaced_node_ids:
+                            for nid, nd in workflow.items():
+                                for k, v in nd.get("inputs", {}).items():
+                                    if (isinstance(v, list) and len(v) == 2
+                                            and str(v[0]) in replaced_node_ids
+                                            and v[1] in repl.output_mapping):
+                                        v[1] = repl.output_mapping[v[1]]
+                        report.fixes_applied.append(f"Replaced {orig} → {repl.replacement}")
                 
                 if still_unknown:
                     report.fixes_needed.append(FixAction(
@@ -308,9 +352,17 @@ class Doctor:
                 filename = ref["filename"]
                 folder = ref["model_folder"]
                 
-                # Check if model exists on disk
+                # Check if model exists on disk (also search subfolders)
                 model_path = os.path.join(self.models_path, folder, filename)
                 exists = os.path.isfile(model_path)
+                if not exists:
+                    # Search recursively in the model folder
+                    folder_path = os.path.join(self.models_path, folder)
+                    if os.path.isdir(folder_path):
+                        for root, _dirs, files in os.walk(folder_path):
+                            if filename in files:
+                                exists = True
+                                break
                 
                 if exists:
                     console.print(f"     ✅ {filename}")
@@ -376,6 +428,17 @@ class Doctor:
                     )
                     if result.returncode == 0:
                         console.print(f"    ✅ Done")
+                        # Verify downloaded model integrity
+                        if fix.category == "download_model":
+                            for km in report.known_models:
+                                info = km.get("download_info")
+                                if info and info.filename in fix.description:
+                                    if not self._verify_download(info):
+                                        console.print(f"    ❌ Download verification failed")
+                                        report.errors_encountered.append(
+                                            f"Download verification failed: {fix.description}"
+                                        )
+                                    break
                         report.fixes_applied.append(fix.description)
                         if fix.category == "install_node":
                             installed_nodes = True
@@ -414,6 +477,22 @@ class Doctor:
                 except Exception as e:
                     console.print(f"    ❌ Error: {e}")
                     report.errors_encountered.append(str(e))
+
+        # Check for pip conflicts after installing nodes
+        if installed_nodes and not self.dry_run:
+            try:
+                pip_check = subprocess.run(
+                    f"{sys.executable} -m pip check",
+                    shell=True, capture_output=True, text=True, timeout=30,
+                )
+                if pip_check.returncode != 0 and pip_check.stdout.strip():
+                    conflicts = pip_check.stdout.strip().split("\n")[:5]
+                    console.print(f"\n  ⚠️  [yellow]Pip dependency conflicts detected:[/yellow]")
+                    for c in conflicts:
+                        console.print(f"     {c}")
+                    console.print("     [dim]These may cause import errors at runtime[/dim]")
+            except Exception:
+                pass
 
         # Restart ComfyUI if we installed new nodes (they need a restart to load)
         if installed_nodes and not self.dry_run:
@@ -651,6 +730,50 @@ class Doctor:
             self.restart_comfyui()
 
         return fixed_any
+
+    def _verify_download(self, info: ModelInfo) -> bool:
+        """Verify a downloaded model file is not corrupt (not truncated, not HTML error page).
+
+        Checks: file exists, not an HTML error page, magic bytes for safetensors/ckpt,
+        and rough size match against expected size.
+        """
+        dest = os.path.join(self.models_path, info.model_folder, info.filename)
+        if not os.path.isfile(dest):
+            return False
+        size = os.path.getsize(dest)
+        # Suspiciously small for a model file (likely an HTML error page)
+        if size < 10_000:
+            try:
+                with open(dest, "rb") as f:
+                    header = f.read(100)
+                if b"<!DOCTYPE" in header or b"<html" in header:
+                    console.print(f"  ⚠️  Downloaded file is an HTML error page, removing")
+                    os.remove(dest)
+                    return False
+            except Exception:
+                pass
+        # Magic bytes check for safetensors (starts with '{' JSON header)
+        if info.filename.endswith(".safetensors") and size > 8:
+            try:
+                with open(dest, "rb") as f:
+                    magic = f.read(8)
+                # safetensors: first 8 bytes are a little-endian u64 (header size)
+                # Valid header size should be < 100MB
+                import struct
+                header_size = struct.unpack("<Q", magic)[0]
+                if header_size > 100_000_000 or header_size == 0:
+                    console.print(f"  ⚠️  {info.filename}: invalid safetensors header, file may be corrupt")
+                    os.remove(dest)
+                    return False
+            except Exception:
+                pass
+        # Check if expected size matches (rough check)
+        if info.size_gb and size < info.size_gb * 1e9 * 0.8:
+            console.print(
+                f"  ⚠️  Downloaded size ({size / 1e9:.1f}GB) is much smaller than "
+                f"expected ({info.size_gb}GB) — file may be truncated"
+            )
+        return True
 
     def _download_command(self, info: ModelInfo) -> str:
         """Generate download command for a model.

@@ -47,6 +47,15 @@ MODEL_INPUT_KEYS = {
     "ip_adapter_file",
     "pulid_file",
     "insightface_model",
+    # AnimateDiff / motion models
+    "animatediff_model", "motion_model_name",
+    # Multi-LoRA stacks (lora_01 through lora_10)
+    "lora_01", "lora_02", "lora_03", "lora_04", "lora_05",
+    "lora_06", "lora_07", "lora_08", "lora_09", "lora_10",
+    # IP-Adapter variants
+    "adapter_name", "ip_adapter_name",
+    # Generic model path / weight name
+    "model_path", "weight_name",
 }
 
 # Model type mapping (input key → model subfolder)
@@ -64,6 +73,16 @@ MODEL_TYPE_MAP = {
     "sam_model_name": "sams",
     "bbox_detector": "ultralytics/bbox",
     "segm_detector": "ultralytics/segm",
+    "animatediff_model": "animatediff_models",
+    "motion_model_name": "animatediff_models",
+    "lora_01": "loras", "lora_02": "loras", "lora_03": "loras",
+    "lora_04": "loras", "lora_05": "loras", "lora_06": "loras",
+    "lora_07": "loras", "lora_08": "loras", "lora_09": "loras",
+    "lora_10": "loras",
+    "adapter_name": "ipadapter",
+    "ip_adapter_name": "ipadapter",
+    "model_path": "checkpoints",
+    "weight_name": "checkpoints",
 }
 
 
@@ -71,6 +90,7 @@ MODEL_TYPE_MAP = {
 UI_ONLY_TYPES = {
     "Note", "PrimitiveNode", "Reroute",
     "SetNode", "GetNode",  # ComfyUI-Workflow-Component
+    "Group",  # UI grouping box, no API equivalent
     "Bookmark (rgthree)", "Fast Groups Muter (rgthree)",  # rgthree UI-only
 }
 
@@ -183,8 +203,31 @@ def _convert_ui_to_api_basic(data: dict) -> dict:
                         else:
                             origin_id, origin_slot = src
                     
+                    # Resolve multi-hop Reroute chains
+                    seen = set()
+                    while True:
+                        origin_node = node_by_id.get(origin_id)
+                        if not origin_node or origin_node.get("type") != "Reroute":
+                            break
+                        if origin_id in seen:
+                            break  # Prevent infinite loops
+                        seen.add(origin_id)
+                        # Follow the Reroute's input link
+                        reroute_inputs = origin_node.get("inputs", [])
+                        resolved = False
+                        for ri in reroute_inputs:
+                            rlink_id = ri.get("link")
+                            if rlink_id is not None and rlink_id in link_map:
+                                rlnk = link_map[rlink_id]
+                                origin_id = rlnk["origin_id"]
+                                origin_slot = rlnk["origin_slot"]
+                                resolved = True
+                                break
+                        if not resolved:
+                            break
+
                     inputs[inp_name] = [origin_id, origin_slot]
-        
+
         api_format[node_id] = {
             "class_type": node_type,
             "inputs": inputs,
@@ -273,10 +316,21 @@ def load_workflow(path: str) -> tuple[dict, bool]:
 
     # API format: top-level keys are node IDs mapping to {class_type, inputs}
     if isinstance(data, dict):
-        # Check if it's wrapped in a "prompt" key
+        # Check if it's wrapped in a "prompt" key (ComfyUI export)
         if "prompt" in data and isinstance(data["prompt"], dict):
             data = data["prompt"]
-        
+
+        # Check if it's wrapped in a "workflow" key (CivitAI format)
+        if "workflow" in data and isinstance(data["workflow"], dict):
+            inner = data["workflow"]
+            # Could be UI format (has "nodes") or API format (has "class_type" values)
+            if "nodes" in inner:
+                api_format = _convert_ui_to_api_basic(inner)
+                return api_format, False
+            sample = next(iter(inner), None)
+            if sample and isinstance(inner.get(sample), dict) and "class_type" in inner[sample]:
+                return inner, True
+
         # Check if it looks like API format
         sample_key = next(iter(data), None)
         if sample_key and isinstance(data.get(sample_key), dict):
@@ -346,6 +400,23 @@ def analyze_workflow(
                 }
                 node_model_refs.append(ref)
                 model_refs.append(ref)
+
+            # Embedding detection in prompt text
+            if isinstance(value, str) and "embedding:" in value:
+                for emb_match in re.finditer(r"embedding:([^\s,\)]+)", value):
+                    emb_name = emb_match.group(1)
+                    # Add .safetensors if no extension
+                    if "." not in emb_name:
+                        emb_name += ".safetensors"
+                    ref = {
+                        "filename": emb_name,
+                        "input_key": key,
+                        "node_id": node_id,
+                        "node_type": class_type,
+                        "model_folder": "embeddings",
+                    }
+                    node_model_refs.append(ref)
+                    model_refs.append(ref)
 
         nodes.append(WorkflowNode(
             node_id=node_id,

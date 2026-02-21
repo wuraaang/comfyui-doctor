@@ -18,6 +18,11 @@ class NodeReplacement:
     description: str = ""
     is_builtin: bool = True    # True if replacement is a ComfyUI built-in
     notes: str = ""            # Caveats about the replacement
+    output_mapping: dict = None  # {original_slot_index: replacement_slot_index}
+
+    def __post_init__(self):
+        if self.output_mapping is None:
+            self.output_mapping = {}
 
 
 # ── Replacement map ───────────────────────────────────────────────────
@@ -164,15 +169,6 @@ REPLACEMENTS: dict[str, NodeReplacement] = {
         "Set/Get are UI-only routing nodes",
     ),
 
-    # ── Video alternatives ────────────────────────────────────────────
-    "AnimateDiffLoader": NodeReplacement(
-        "AnimateDiffLoader",
-        "VHS_VideoCombine",
-        {},
-        "When AnimateDiff isn't available, at least combine frames",
-        is_builtin=False,
-        notes="This is a last resort — AnimateDiff should be installed",
-    ),
 }
 
 

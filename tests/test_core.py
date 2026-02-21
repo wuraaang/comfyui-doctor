@@ -243,6 +243,119 @@ def test_error_matching_validation():
     print(f"✅ test_error_matching_missing_node_http400 passed")
 
 
+def test_civitai_wrapper_format():
+    """B014: Test loading a CivitAI-wrapped workflow {"workflow": {"nodes": [...]}}."""
+    import tempfile
+    # CivitAI wraps UI-format workflows in {"workflow": {...}}
+    civitai_data = {
+        "workflow": {
+            "nodes": [
+                {"id": 1, "type": "CheckpointLoaderSimple", "inputs": [], "outputs": [
+                    {"name": "MODEL", "links": [1]},
+                    {"name": "CLIP", "links": [2, 3]},
+                    {"name": "VAE", "links": [4]},
+                ], "widgets_values": ["sd_xl_base_1.0.safetensors"]},
+                {"id": 2, "type": "CLIPTextEncode", "inputs": [
+                    {"name": "clip", "link": 2},
+                ], "outputs": [
+                    {"name": "CONDITIONING", "links": [5]},
+                ], "widgets_values": ["a photo of a cat"]},
+                {"id": 3, "type": "KSampler", "inputs": [
+                    {"name": "model", "link": 1},
+                    {"name": "positive", "link": 5},
+                ], "outputs": [
+                    {"name": "LATENT", "links": [6]},
+                ], "widgets_values": [42, "fixed", 20, 7.0, "euler", "normal", 1.0]},
+            ],
+            "links": [
+                [1, 1, 0, 3, 0, "MODEL"],
+                [2, 1, 1, 2, 0, "CLIP"],
+                [3, 1, 1, 3, 1, "CLIP"],
+                [4, 1, 2, 3, 2, "VAE"],
+                [5, 2, 0, 3, 1, "CONDITIONING"],
+                [6, 3, 0, 4, 0, "LATENT"],
+            ],
+        }
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(civitai_data, f)
+        tmp_path = f.name
+    try:
+        workflow, is_api = load_workflow(tmp_path)
+        # Should detect as UI format (needs conversion)
+        assert not is_api, "CivitAI wrapper should be detected as needing conversion"
+        # Should have parsed nodes (excluding UI-only)
+        assert len(workflow) >= 3, f"Expected at least 3 nodes, got {len(workflow)}"
+        # KSampler should be present
+        class_types = {nd.get("class_type") for nd in workflow.values()}
+        assert "KSampler" in class_types
+        assert "CheckpointLoaderSimple" in class_types
+        print(f"✅ test_civitai_wrapper_format passed ({len(workflow)} nodes)")
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_reroute_multihop():
+    """B015: Test multi-hop Reroute resolution (3+ levels)."""
+    import tempfile
+    # Workflow: CheckpointLoader → Reroute1 → Reroute2 → Reroute3 → KSampler
+    ui_data = {
+        "nodes": [
+            {"id": 1, "type": "CheckpointLoaderSimple", "inputs": [], "outputs": [
+                {"name": "MODEL", "links": [1]},
+            ], "widgets_values": ["sd_xl_base_1.0.safetensors"]},
+            {"id": 10, "type": "Reroute", "inputs": [
+                {"name": "input", "link": 1},
+            ], "outputs": [
+                {"name": "output", "links": [2]},
+            ], "widgets_values": []},
+            {"id": 11, "type": "Reroute", "inputs": [
+                {"name": "input", "link": 2},
+            ], "outputs": [
+                {"name": "output", "links": [3]},
+            ], "widgets_values": []},
+            {"id": 12, "type": "Reroute", "inputs": [
+                {"name": "input", "link": 3},
+            ], "outputs": [
+                {"name": "output", "links": [4]},
+            ], "widgets_values": []},
+            {"id": 2, "type": "KSampler", "inputs": [
+                {"name": "model", "link": 4},
+            ], "outputs": [
+                {"name": "LATENT", "links": []},
+            ], "widgets_values": [42, "fixed", 20, 7.0, "euler", "normal", 1.0]},
+        ],
+        "links": [
+            [1, 1, 0, 10, 0, "MODEL"],
+            [2, 10, 0, 11, 0, "MODEL"],
+            [3, 11, 0, 12, 0, "MODEL"],
+            [4, 12, 0, 2, 0, "MODEL"],
+        ],
+    }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump(ui_data, f)
+        tmp_path = f.name
+    try:
+        workflow, is_api = load_workflow(tmp_path)
+        # Reroute nodes should be stripped
+        class_types = {nd.get("class_type") for nd in workflow.values()}
+        assert "Reroute" not in class_types, "Reroute nodes should be stripped"
+        # KSampler's model input should point to node 1 (CheckpointLoader), not a Reroute
+        ksampler = None
+        for nd in workflow.values():
+            if nd.get("class_type") == "KSampler":
+                ksampler = nd
+                break
+        assert ksampler is not None, "KSampler should exist"
+        model_input = ksampler["inputs"].get("model")
+        assert model_input is not None, "KSampler should have model input"
+        assert isinstance(model_input, list), "model input should be a connection"
+        assert model_input[0] == "1", f"model should connect to node 1, got {model_input[0]}"
+        print(f"✅ test_reroute_multihop passed (3 hops resolved to node {model_input[0]})")
+    finally:
+        os.unlink(tmp_path)
+
+
 if __name__ == "__main__":
     test_workflow_loading()
     test_workflow_analysis()
@@ -255,4 +368,6 @@ if __name__ == "__main__":
     test_validate_inputs()
     test_auto_fix_inputs()
     test_error_matching_validation()
+    test_civitai_wrapper_format()
+    test_reroute_multihop()
     print("\n🎉 All tests passed!")
