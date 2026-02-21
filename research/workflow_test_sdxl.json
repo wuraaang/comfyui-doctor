@@ -17,7 +17,7 @@
   "4": {
     "class_type": "CheckpointLoaderSimple",
     "inputs": {
-      "ckpt_name": "sd_xl_base_1.0_0.9vae.safetensors"
+      "ckpt_name": "sd_xl_base_1.0.safetensors"
     }
   },
   "5": {
