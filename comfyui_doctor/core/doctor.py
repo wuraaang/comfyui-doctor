@@ -121,10 +121,13 @@ class Doctor:
         """Try to connect to Comfy-Pilot MCP server."""
         try:
             from .mcp_client import MCPConnection
-            mcp = MCPConnection()
+            mcp = MCPConnection(url=self.comfyui_url)
             if mcp.connect():
                 self.mcp_client = mcp
-                console.print("  🔗 [dim]Connected to Comfy-Pilot MCP[/dim]")
+                if mcp.has_comfy_pilot():
+                    console.print("  🔗 [dim]Connected to Comfy-Pilot MCP[/dim]")
+                else:
+                    console.print("  🔗 [dim]Connected to ComfyUI API (no Comfy-Pilot)[/dim]")
             else:
                 self.mcp_client = None
         except Exception:

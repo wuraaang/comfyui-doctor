@@ -318,10 +318,13 @@ def status(
     # MCP status
     try:
         from .core.mcp_client import MCPConnection
-        mcp = MCPConnection()
+        mcp = MCPConnection(url=comfyui_url)
         if mcp.connect():
-            tools = mcp.list_tools()
-            console.print(f"   🔗 MCP: [green]connected[/green] ({len(tools)} tools)")
+            if mcp.has_comfy_pilot():
+                tools = mcp.list_tools()
+                console.print(f"   🔗 Comfy-Pilot: [green]connected[/green] ({len(tools)} tools)")
+            else:
+                console.print(f"   🔗 ComfyUI API: [green]connected[/green] (no Comfy-Pilot)")
         else:
             console.print(f"   🔗 MCP: [dim]not available[/dim]")
     except Exception:
