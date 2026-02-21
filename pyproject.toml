@@ -30,6 +30,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
+llm = ["anthropic>=0.25.0"]
+mcp = ["mcp>=0.1.0"]
 
 [project.scripts]
 comfyui-doctor = "comfyui_doctor.cli:app"

@@ -16,7 +16,10 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .llm import LLMClient
 
 from rich.console import Console
 from rich.panel import Panel
@@ -83,12 +86,14 @@ class Doctor:
         max_retries: int = 3,
         auto_fix: bool = True,
         dry_run: bool = False,
+        llm_client: Optional["LLMClient"] = None,
     ):
         self.api = ComfyAPI(url=comfyui_url)
         self.comfyui_path = comfyui_path or self._detect_comfyui_path()
         self.max_retries = max_retries
         self.auto_fix = auto_fix
         self.dry_run = dry_run
+        self.llm_client = llm_client
 
     def _detect_comfyui_path(self) -> str:
         """Try to auto-detect ComfyUI installation path."""
